@@ -40,7 +40,7 @@ The Cloudflare Pages project is named `gatehouse-demo` and will be served at `ht
 
 ## GitHub Actions deployment pipeline
 
-The workflow at `.github/workflows/deploy-demo.yml` builds the Spring Boot API on pull requests and pushes to `main`. On `main`, it deploys the static frontend to Cloudflare Pages when the `DEPLOY_ENABLED` Actions variable is `true`; you can also run a manual deployment from the Actions tab using `workflow_dispatch`. The workflow uses Cloudflare's `cf` CLI for Pages direct upload. Render is configured to auto-deploy from `main`, so GitHub pushes deploy the API there automatically. The Maven package step skips tests because this demo has no test suite.
+The workflow at `.github/workflows/deploy-demo.yml` builds the Spring Boot API on pull requests and pushes to `main`. On `main`, it deploys the static frontend to Cloudflare Pages when the `DEPLOY_ENABLED` Actions variable is `true`; you can also run a manual deployment from the Actions tab using `workflow_dispatch`. The workflow uses Cloudflare's Wrangler Action for Pages direct upload because the `cf` Pages deployment API command does not generate the required asset manifest. Render is configured to auto-deploy from `main`, so GitHub pushes deploy the API there automatically. The Maven package step skips tests because this demo has no test suite.
 
 Set this repository **Actions secret**:
 
