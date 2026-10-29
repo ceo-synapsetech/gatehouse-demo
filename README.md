@@ -36,25 +36,21 @@ Place the API and Postgres in the same Render region and use the internal databa
 
 ## Cloudflare frontend
 
-Deploy the `frontend/` directory as a Cloudflare Pages static site. Before deployment, set `window.GATEHOUSE_API_BASE` to the Render API URL (a `config.js` or a small inline config loaded before the app script can do this). The frontend must use the exact same origin value configured as `CORS_ALLOWED_ORIGIN` on Render.
+The Cloudflare Pages project is named `gatehouse-demo` and will be served at `https://gatehouse-demo.pages.dev`. The GitHub Actions workflow writes the Render API URL into `frontend/config.js` during deployment. Render's `CORS_ALLOWED_ORIGIN` must match the Pages origin exactly.
 
 ## GitHub Actions deployment pipeline
 
-The workflow at `.github/workflows/deploy-demo.yml` builds the Spring Boot API on pull requests and pushes to `main`. A push to `main` then deploys the static frontend to Cloudflare Pages and triggers a Render API deploy. It currently runs a Maven package build with test execution skipped; no test suite is included in this demo.
+The workflow at `.github/workflows/deploy-demo.yml` builds the Spring Boot API on pull requests and pushes to `main`. On `main`, it deploys the static frontend to Cloudflare Pages when the `DEPLOY_ENABLED` Actions variable is `true`; you can also run a manual deployment from the Actions tab using `workflow_dispatch`. The workflow uses Cloudflare's Wrangler Action for Pages direct upload. Render is configured to auto-deploy from `main`, so GitHub pushes deploy the API there automatically. The Maven package step skips tests because this demo has no test suite.
 
-Set these repository **Actions secrets**:
+Set this repository **Actions secret**:
 
-- `CLOUDFLARE_API_TOKEN` (Cloudflare Pages edit permission)
-- `CLOUDFLARE_ACCOUNT_ID`
-- `GATEHOUSE_API_BASE_URL` (the Render API base URL, e.g. `https://gatehouse-api.onrender.com`)
-- `RENDER_DEPLOY_HOOK_URL` (Render service Settings → Deploy Hook)
+- `CLOUDFLARE_API_TOKEN` (a token with Cloudflare Pages Edit access scoped to the Gatehouse account)
 
 Set this repository **Actions variable**:
 
-- `CF_PAGES_PROJECT` (the Cloudflare Pages project name)
-- `DEPLOY_ENABLED=true` only after all deployment secrets and services have been configured. Until then, the pipeline builds the API but skips deployment.
+- `DEPLOY_ENABLED=true` after the token is saved. The Cloudflare account ID, Pages project name, and Render API URL are already set in the workflow.
 
-Connect Render to the same GitHub repository and configure the service to use `backend/Dockerfile` with `backend/` as its Docker context. The GitHub workflow triggers its deploy hook after the frontend deploy; turn off Render's automatic deploy-on-commit to avoid duplicate deployments. Configure Render's `CORS_ALLOWED_ORIGIN` with the deployed Pages origin. Store secrets only in GitHub Actions or the hosting dashboards, never in source files or chat.
+Keep the Cloudflare token in GitHub Actions Secrets; never commit it or paste it into chat.
 
 ## Demo scope and go-live work
 
