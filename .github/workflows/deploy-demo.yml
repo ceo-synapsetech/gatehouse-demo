@@ -37,7 +37,7 @@ jobs:
         run: npm install --global cf@0.15.0
       - name: Deploy frontend to Cloudflare Pages
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN_GATE_HOUSE }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: 9eb8a40b061418ea81c226d47b6a1d32
         run: |
           if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
