@@ -1,0 +1,61 @@
+name: Build and deploy Gatehouse demo
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build-api:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Build Spring Boot API
+        run: mvn -B -f backend/pom.xml -DskipTests package
+
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true'
+    needs: build-api
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Configure API URL for Cloudflare Pages
+        env:
+          GATEHOUSE_API_BASE_URL: ${{ secrets.GATEHOUSE_API_BASE_URL }}
+        run: |
+          if [ -z "$GATEHOUSE_API_BASE_URL" ]; then
+            echo "Missing GitHub Actions secret GATEHOUSE_API_BASE_URL" >&2
+            exit 1
+          fi
+          printf "window.GATEHOUSE_API_BASE = '%s';\n" "$GATEHOUSE_API_BASE_URL" > frontend/config.js
+      - name: Deploy frontend to Cloudflare Pages
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CF_PAGES_PROJECT: ${{ vars.CF_PAGES_PROJECT }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ] || [ -z "$CF_PAGES_PROJECT" ]; then
+            echo "Set CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, and Actions variable CF_PAGES_PROJECT" >&2
+            exit 1
+          fi
+          npx --yes wrangler@4 pages deploy frontend --project-name "$CF_PAGES_PROJECT" --branch main
+      - name: Trigger Render API deployment
+        env:
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -z "$RENDER_DEPLOY_HOOK_URL" ]; then
+            echo "Set GitHub Actions secret RENDER_DEPLOY_HOOK_URL" >&2
+            exit 1
+          fi
+          curl --fail --silent --show-error --request POST "$RENDER_DEPLOY_HOOK_URL"
