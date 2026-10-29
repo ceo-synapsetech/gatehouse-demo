@@ -37,11 +37,11 @@ jobs:
         run: npm install --global cf@0.15.0
       - name: Deploy frontend to Cloudflare Pages
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN_GATE_HOUSE: ${{ secrets.CLOUDFLARE_API_TOKEN_GATE_HOUSE }}
           CLOUDFLARE_ACCOUNT_ID: 9eb8a40b061418ea81c226d47b6a1d32
         run: |
-          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
-            echo "Missing GitHub Actions secret CLOUDFLARE_API_TOKEN" >&2
+          if [ -z "$CLOUDFLARE_API_TOKEN_GATE_HOUSE" ]; then
+            echo "Missing GitHub Actions secret CLOUDFLARE_API_TOKEN_GATE_HOUSE" >&2
             exit 1
           fi
           cf pages projects deployments create gatehouse-demo --pages-build-output-dir frontend --branch main
