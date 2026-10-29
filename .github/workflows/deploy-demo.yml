@@ -23,7 +23,7 @@ jobs:
         run: mvn -B -f backend/pom.xml -DskipTests package
 
   deploy:
-    if: github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || vars.DEPLOY_ENABLED == 'true')
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     needs: build-api
     runs-on: ubuntu-latest
     permissions:

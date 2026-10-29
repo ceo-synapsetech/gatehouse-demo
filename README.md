@@ -40,18 +40,13 @@ The Cloudflare Pages project is named `gatehouse-demo` and will be served at `ht
 
 ## GitHub Actions deployment pipeline
 
-The workflow at `.github/workflows/deploy-demo.yml` builds the Spring Boot API on pull requests and pushes to `main`. On `main`, it deploys the static frontend to Cloudflare Pages when the `DEPLOY_ENABLED` Actions variable is `true`; you can also run a manual deployment from the Actions tab using `workflow_dispatch`. The workflow uses Cloudflare's Wrangler Action for Pages direct upload because the `cf` Pages deployment API command does not generate the required asset manifest. Render is configured to auto-deploy from `main`, so GitHub pushes deploy the API there automatically. The Maven package step skips tests because this demo has no test suite.
+The workflow at `.github/workflows/deploy-demo.yml` builds the Spring Boot API on pull requests and pushes to `main`. Pushes to `main` and manual workflow runs deploy the static frontend to Cloudflare Pages. It uses Cloudflare's Wrangler Action for Pages direct upload because the `cf` Pages deployment command does not generate the required asset manifest. Render auto-deploys the API from `main`. The Maven package step skips tests because this demo has no test suite.
 
 Set this repository **Actions secret**:
 
 - `CLOUDFLARE_API_TOKEN` (a token with Cloudflare Pages Edit access scoped to the Gatehouse account)
 
-Set this repository **Actions variable**:
-
-- `DEPLOY_ENABLED=true` after the token is saved. The Cloudflare account ID, Pages project name, and Render API URL are already set in the workflow.
-
-Keep the Cloudflare token in GitHub Actions Secrets; never commit it or paste it into chat.
-
+Keep the Cloudflare token in GitHub Actions Secrets; never commit it or paste it into chat. The account ID, Pages project name, and Render API URL are already set in the workflow.
 ## Demo scope and go-live work
 
 This starter is for a client demo, not production. It has two fixed users, one resident account, sample blocks/units, and basic role checks. No push notifications, resident imports, registration, password reset, audit trail, rate limiting, field-level encryption, secrets manager integration, backup/retention policy, or production session/token flow is included. Use only fictitious data. Before go-live, replace demo auth, add required personal-data safeguards and operational processes, configure managed secrets and backups, and obtain the appropriate privacy/legal review for India.
