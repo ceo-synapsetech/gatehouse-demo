@@ -28,7 +28,7 @@ public class SecurityConfig {
         );
     }
 
-    @Bean CorsConfigurationSource cors(@Value("${CORS_ALLOWED_ORIGIN:http://localhost:8788}") String origin) {
+    @Bean CorsConfigurationSource cors(@Value("${CORS_ALLOWED_ORIGIN:https://gatehouse-demo.pages.dev}") String origin) {
         CorsConfiguration config = new CorsConfiguration();
         config.setAllowedOrigins(List.of(origin));
         config.setAllowedMethods(List.of("GET", "POST", "PATCH", "OPTIONS"));
