@@ -1,5 +1,6 @@
 package com.gatehouse.demo;
 
+import java.util.Arrays;
 import java.util.List;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -27,9 +28,9 @@ public class SecurityConfig {
         );
     }
 
-    @Bean UrlBasedCorsConfigurationSource cors(@Value("${CORS_ALLOWED_ORIGIN:https://gatehouse-demo.pages.dev}") String origin) {
+    @Bean UrlBasedCorsConfigurationSource cors(@Value("${CORS_ALLOWED_ORIGIN:https://gatehouse-demo.pages.dev,https://gatehouse.synapsetechworld.com}") String origins) {
         CorsConfiguration config = new CorsConfiguration();
-        config.setAllowedOrigins(List.of(origin));
+        config.setAllowedOrigins(Arrays.stream(origins.split(",")).map(String::trim).filter(origin -> !origin.isEmpty()).toList());
         config.setAllowedMethods(List.of("GET", "POST", "PATCH", "OPTIONS"));
         config.setAllowedHeaders(List.of("Authorization", "Content-Type"));
         config.setAllowCredentials(false);
