@@ -28,7 +28,7 @@ public class SecurityConfig {
         );
     }
 
-    @Bean UrlBasedCorsConfigurationSource cors(@Value("${CORS_ALLOWED_ORIGIN:https://gatehouse-demo.pages.dev,https://gatehouse.synapsetechworld.com}") String origins) {
+    @Bean UrlBasedCorsConfigurationSource cors(@Value("${CORS_ALLOWED_ORIGIN:https://gatehouse-demo.pages.dev,https://gatehouse.synapsetechworld.com,https://gatehouse-keep.synapsetechworld.com,https://gatehouse-res.synapsetechworld.com}") String origins) {
         CorsConfiguration config = new CorsConfiguration();
         config.setAllowedOrigins(Arrays.stream(origins.split(",")).map(String::trim).filter(origin -> !origin.isEmpty()).toList());
         config.setAllowedMethods(List.of("GET", "POST", "PATCH", "OPTIONS"));
