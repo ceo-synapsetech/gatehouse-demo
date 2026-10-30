@@ -14,7 +14,6 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.provisioning.InMemoryUserDetailsManager;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.web.cors.CorsConfiguration;
-import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
 @Configuration
@@ -28,7 +27,7 @@ public class SecurityConfig {
         );
     }
 
-    @Bean CorsConfigurationSource cors(@Value("${CORS_ALLOWED_ORIGIN:https://gatehouse-demo.pages.dev}") String origin) {
+    @Bean UrlBasedCorsConfigurationSource cors(@Value("${CORS_ALLOWED_ORIGIN:https://gatehouse-demo.pages.dev}") String origin) {
         CorsConfiguration config = new CorsConfiguration();
         config.setAllowedOrigins(List.of(origin));
         config.setAllowedMethods(List.of("GET", "POST", "PATCH", "OPTIONS"));
@@ -39,8 +38,8 @@ public class SecurityConfig {
         return source;
     }
 
-    @Bean SecurityFilterChain security(HttpSecurity http) throws Exception {
-        return http.cors(Customizer.withDefaults()).csrf(csrf -> csrf.disable())
+    @Bean SecurityFilterChain security(HttpSecurity http, UrlBasedCorsConfigurationSource corsSource) throws Exception {
+        return http.cors(cors -> cors.configurationSource(corsSource)).csrf(csrf -> csrf.disable())
             .authorizeHttpRequests(auth -> auth.requestMatchers("/api/health", "/error").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/requests").hasRole("SECURITY")
                 .requestMatchers(HttpMethod.PATCH, "/api/requests/*/decision").hasRole("RESIDENT")
