@@ -9,6 +9,9 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  firebase_core: ^5.1.0
+  firebase_messaging: ^17.0.1
 
 flutter:
   uses-material-design: true
+

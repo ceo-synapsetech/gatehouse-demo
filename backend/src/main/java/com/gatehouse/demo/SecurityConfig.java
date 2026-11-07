@@ -31,7 +31,7 @@ public class SecurityConfig {
     @Bean UrlBasedCorsConfigurationSource cors(@Value("${CORS_ALLOWED_ORIGIN:https://gatehouse-demo.pages.dev,https://gatehouse.synapsetechworld.com,https://gatehouse-keep.synapsetechworld.com,https://gatehouse-res.synapsetechworld.com}") String origins) {
         CorsConfiguration config = new CorsConfiguration();
         config.setAllowedOrigins(Arrays.stream(origins.split(",")).map(String::trim).filter(origin -> !origin.isEmpty()).toList());
-        config.setAllowedMethods(List.of("GET", "POST", "PATCH", "OPTIONS"));
+        config.setAllowedMethods(List.of("GET", "POST", "PATCH", "DELETE", "OPTIONS"));
         config.setAllowedHeaders(List.of("Authorization", "Content-Type"));
         config.setAllowCredentials(false);
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
@@ -43,6 +43,8 @@ public class SecurityConfig {
         return http.cors(cors -> cors.configurationSource(corsSource)).csrf(csrf -> csrf.disable())
             .authorizeHttpRequests(auth -> auth.requestMatchers("/api/health", "/error").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/requests").hasRole("SECURITY")
+                .requestMatchers(HttpMethod.POST, "/api/devices").hasRole("RESIDENT")
+                .requestMatchers(HttpMethod.DELETE, "/api/devices").hasRole("RESIDENT")
                 .requestMatchers(HttpMethod.PATCH, "/api/requests/*/decision", "/api/notifications/*/read").hasRole("RESIDENT")
                 .requestMatchers("/api/**").authenticated())
             .httpBasic(Customizer.withDefaults()).build();

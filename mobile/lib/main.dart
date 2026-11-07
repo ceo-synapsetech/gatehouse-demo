@@ -2,7 +2,10 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
+import 'firebase_options.dart';
 
 const _apiBase = String.fromEnvironment(
   'GATEHOUSE_API_BASE',
@@ -15,7 +18,11 @@ const _paper = Color(0xFFF4F7F4);
 const _ink = Color(0xFF182824);
 const _muted = Color(0xFF71807B);
 
-void main() => runApp(const GatehouseApp());
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  runApp(const GatehouseApp());
+}
 
 enum UserRole { security, resident }
 
@@ -169,6 +176,22 @@ class ApiClient {
 
   Future<void> markNotificationRead(int id) async {
     await _request('/api/notifications/$id/read', method: 'PATCH');
+  }
+
+  Future<void> registerDevice(String token) async {
+    await _request(
+      '/api/devices',
+      method: 'POST',
+      body: {'token': token},
+    );
+  }
+
+  Future<void> unregisterDevice(String token) async {
+    await _request(
+      '/api/devices',
+      method: 'DELETE',
+      body: {'token': token},
+    );
   }
 
   void close() => _client.close(force: true);
@@ -543,6 +566,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
   bool _showTimestamps = true;
   List<AppNotification> _notifications = [];
   Timer? _notificationTimer;
+  StreamSubscription<String>? _tokenRefreshSubscription;
+  StreamSubscription<RemoteMessage>? _foregroundMessageSubscription;
+  StreamSubscription<RemoteMessage>? _messageOpenSubscription;
+  String? _deviceToken;
   String? _error;
 
   UserRole get _role => widget.profile.role;
@@ -558,6 +585,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _loadRequests();
     if (_role == UserRole.resident) {
       _loadNotifications();
+      _setupPushNotifications();
       _notificationTimer = Timer.periodic(
         const Duration(seconds: 20),
         (_) => _loadNotifications(silent: true),
@@ -568,7 +596,53 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   void dispose() {
     _notificationTimer?.cancel();
+    _tokenRefreshSubscription?.cancel();
+    _foregroundMessageSubscription?.cancel();
+    _messageOpenSubscription?.cancel();
     super.dispose();
+  }
+
+  Future<void> _setupPushNotifications() async {
+    try {
+      final messaging = FirebaseMessaging.instance;
+      final permission = await messaging.requestPermission();
+      if (permission.authorizationStatus == AuthorizationStatus.denied) return;
+      final token = await messaging.getToken();
+      if (token != null) {
+        _deviceToken = token;
+        await widget.api.registerDevice(token);
+      }
+      _tokenRefreshSubscription = messaging.onTokenRefresh.listen((token) {
+        _deviceToken = token;
+        widget.api.registerDevice(token).catchError((_) {});
+      });
+      _foregroundMessageSubscription = FirebaseMessaging.onMessage.listen((message) {
+        _loadNotifications(silent: true);
+        final title = message.notification?.title;
+        if (title != null && mounted) _notice(title);
+      });
+      _messageOpenSubscription = FirebaseMessaging.onMessageOpenedApp.listen((_) {
+        if (mounted) _openNotifications();
+      });
+      final initialMessage = await messaging.getInitialMessage();
+      if (initialMessage != null && mounted) _openNotifications();
+    } on FirebaseException catch (error) {
+      if (mounted) _notice('Push setup failed: ${error.message ?? error.code}');
+    } on ApiException catch (error) {
+      if (mounted) _notice('Could not register this device: ${error.message}');
+    }
+  }
+
+  Future<void> _signOut() async {
+    final token = _deviceToken;
+    if (token != null) {
+      try {
+        await widget.api.unregisterDevice(token);
+      } on ApiException {
+        // Signing out should still work if the device is offline.
+      }
+    }
+    if (mounted) widget.onSignOut();
   }
 
   Future<void> _loadNotifications({bool silent = false}) async {
@@ -825,7 +899,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             onSelected: (value) {
               if (value == 'profile') _showProfile();
               if (value == 'settings') _showSettings();
-              if (value == 'logout') widget.onSignOut();
+              if (value == 'logout') _signOut();
             },
             itemBuilder: (context) => const [
               PopupMenuItem(
