@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -159,6 +160,17 @@ class ApiClient {
     );
   }
 
+  Future<List<AppNotification>> notifications() async {
+    final result = await _request('/api/notifications') as List<dynamic>;
+    return result
+        .map((item) => AppNotification.fromJson(item as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<void> markNotificationRead(int id) async {
+    await _request('/api/notifications/$id/read', method: 'PATCH');
+  }
+
   void close() => _client.close(force: true);
 }
 
@@ -205,6 +217,34 @@ class AccessRequest {
     details: json['details'] as String? ?? '',
     status: json['status'] as String? ?? 'PENDING',
     createdAt: DateTime.tryParse(json['createdAt'] as String? ?? ''),
+  );
+}
+
+class AppNotification {
+  const AppNotification({
+    required this.id,
+    required this.requestId,
+    required this.title,
+    required this.message,
+    required this.createdAt,
+    required this.readAt,
+  });
+
+  final int id;
+  final int? requestId;
+  final String title;
+  final String message;
+  final DateTime? createdAt;
+  final DateTime? readAt;
+  bool get isRead => readAt != null;
+
+  factory AppNotification.fromJson(Map<String, dynamic> json) => AppNotification(
+    id: (json['id'] as num).toInt(),
+    requestId: (json['requestId'] as num?)?.toInt(),
+    title: json['title'] as String? ?? 'Gatehouse notification',
+    message: json['message'] as String? ?? '',
+    createdAt: DateTime.tryParse(json['createdAt'] as String? ?? ''),
+    readAt: DateTime.tryParse(json['readAt'] as String? ?? ''),
   );
 }
 
@@ -501,6 +541,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   bool _working = false;
   bool _compact = false;
   bool _showTimestamps = true;
+  List<AppNotification> _notifications = [];
+  Timer? _notificationTimer;
   String? _error;
 
   UserRole get _role => widget.profile.role;
@@ -514,6 +556,87 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void initState() {
     super.initState();
     _loadRequests();
+    if (_role == UserRole.resident) {
+      _loadNotifications();
+      _notificationTimer = Timer.periodic(
+        const Duration(seconds: 20),
+        (_) => _loadNotifications(silent: true),
+      );
+    }
+  }
+
+  @override
+  void dispose() {
+    _notificationTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _loadNotifications({bool silent = false}) async {
+    try {
+      final items = await widget.api.notifications();
+      if (mounted) setState(() => _notifications = items);
+    } on ApiException catch (error) {
+      if (!silent && mounted) _notice(error.message);
+    }
+  }
+
+  Future<void> _openNotifications() async {
+    await _loadNotifications();
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: SizedBox(
+          height: MediaQuery.sizeOf(sheetContext).height * .72,
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 4, 20, 12),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text('Notifications', style: Theme.of(sheetContext).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800)),
+                    ),
+                    TextButton(onPressed: () => _loadNotifications(), child: const Text('Refresh')),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: _notifications.isEmpty
+                    ? const Center(child: Text('You’re all caught up.', style: TextStyle(color: _muted)))
+                    : ListView.separated(
+                        itemCount: _notifications.length,
+                        separatorBuilder: (_, _) => const Divider(height: 1),
+                        itemBuilder: (context, index) {
+                          final item = _notifications[index];
+                          return ListTile(
+                            leading: Icon(item.isRead ? Icons.notifications_none : Icons.notifications_active_outlined, color: item.isRead ? _muted : _blue),
+                            title: Text(item.title, style: TextStyle(fontWeight: item.isRead ? FontWeight.w500 : FontWeight.w800)),
+                            subtitle: Text(item.message),
+                            trailing: item.isRead ? null : const Icon(Icons.circle, size: 9, color: _blue),
+                            onTap: () async {
+                              if (!item.isRead) {
+                                try {
+                                  await widget.api.markNotificationRead(item.id);
+                                  await _loadNotifications(silent: true);
+                                } on ApiException catch (error) {
+                                  if (mounted) _notice(error.message);
+                                }
+                              }
+                              if (sheetContext.mounted) Navigator.pop(sheetContext);
+                              await _loadRequests();
+                            },
+                          );
+                        },
+                      ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   Future<void> _loadRequests() async {
@@ -675,6 +798,27 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ],
         ),
         actions: [
+          if (_role == UserRole.resident)
+            IconButton(
+              tooltip: 'Notifications',
+              onPressed: _openNotifications,
+              icon: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  const Icon(Icons.notifications_outlined),
+                  if (_notifications.any((item) => !item.isRead))
+                    Positioned(
+                      right: -3,
+                      top: -3,
+                      child: Container(
+                        width: 10,
+                        height: 10,
+                        decoration: const BoxDecoration(color: Color(0xFFC94F43), shape: BoxShape.circle),
+                      ),
+                    ),
+                ],
+              ),
+            ),
           PopupMenuButton<String>(
             tooltip: 'Account menu',
             icon: const Icon(Icons.menu_rounded),
@@ -1174,3 +1318,4 @@ class _NewRequestDialogState extends State<_NewRequestDialog> {
     ],
   );
 }
+

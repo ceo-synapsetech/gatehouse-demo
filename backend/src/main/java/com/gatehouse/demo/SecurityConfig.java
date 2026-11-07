@@ -43,7 +43,7 @@ public class SecurityConfig {
         return http.cors(cors -> cors.configurationSource(corsSource)).csrf(csrf -> csrf.disable())
             .authorizeHttpRequests(auth -> auth.requestMatchers("/api/health", "/error").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/requests").hasRole("SECURITY")
-                .requestMatchers(HttpMethod.PATCH, "/api/requests/*/decision").hasRole("RESIDENT")
+                .requestMatchers(HttpMethod.PATCH, "/api/requests/*/decision", "/api/notifications/*/read").hasRole("RESIDENT")
                 .requestMatchers("/api/**").authenticated())
             .httpBasic(Customizer.withDefaults()).build();
     }
