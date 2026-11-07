@@ -608,7 +608,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     ? const Center(child: Text('You’re all caught up.', style: TextStyle(color: _muted)))
                     : ListView.separated(
                         itemCount: _notifications.length,
-                        separatorBuilder: (_, _) => const Divider(height: 1),
+                        separatorBuilder: (context, index) => const Divider(height: 1),
                         itemBuilder: (context, index) {
                           final item = _notifications[index];
                           return ListTile(
