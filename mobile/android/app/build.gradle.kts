@@ -35,12 +35,12 @@ android {
         create("resident") {
             dimension = "audience"
             applicationId = "com.synapsetech.gatehouse"
-            resValue("string", "app_name", "Gatehouse Resident")
+            manifestPlaceholders["appLabel"] = "Gatehouse Resident"
         }
         create("security") {
             dimension = "audience"
             applicationId = "com.synapsetech.gatehouse.security"
-            resValue("string", "app_name", "Gatehouse Security")
+            manifestPlaceholders["appLabel"] = "Gatehouse Security"
         }
     }
 
