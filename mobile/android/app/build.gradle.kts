@@ -30,12 +30,35 @@ android {
         versionName = flutter.versionName
     }
 
+    flavorDimensions += "audience"
+    productFlavors {
+        create("resident") {
+            dimension = "audience"
+            applicationId = "com.synapsetech.gatehouse"
+            resValue("string", "app_name", "Gatehouse Resident")
+        }
+        create("security") {
+            dimension = "audience"
+            applicationId = "com.synapsetech.gatehouse.security"
+            resValue("string", "app_name", "Gatehouse Security")
+        }
+    }
+
     buildTypes {
         release {
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.getByName("debug")
         }
+    }
+}
+
+// Firebase is resident-only. The security flavor does not have a Firebase app registration.
+tasks.configureEach {
+    if (name.contains("GoogleServices", ignoreCase = true) &&
+        name.contains("security", ignoreCase = true)
+    ) {
+        enabled = false
     }
 }
 
