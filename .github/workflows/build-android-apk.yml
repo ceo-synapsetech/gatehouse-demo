@@ -3,6 +3,7 @@ name: Build Gatehouse role APKs
 on:
   push:
     branches:
+      - main
       - codex/role-specific-apks
     paths:
       - mobile/**
