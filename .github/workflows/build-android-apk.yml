@@ -1,0 +1,60 @@
+name: Build Android APK
+
+on:
+  push:
+    branches:
+      - codex/android-apk
+    paths:
+      - mobile/**
+      - .github/workflows/build-android-apk.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+          cache-key: flutter-${{ runner.os }}-${{ hashFiles('mobile/pubspec.lock') }}
+
+      - name: Resolve Flutter packages
+        working-directory: mobile
+        run: flutter pub get
+
+      - name: Build APKs for each Android architecture
+        working-directory: mobile
+        run: flutter build apk --release --split-per-abi
+
+      - name: Upload arm64 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: gatehouse-android-arm64
+          path: mobile/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload 32-bit ARM APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: gatehouse-android-armv7
+          path: mobile/build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload x86_64 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: gatehouse-android-x86_64
+          path: mobile/build/app/outputs/flutter-apk/app-x86_64-release.apk
+          if-no-files-found: error
+          retention-days: 14
+
