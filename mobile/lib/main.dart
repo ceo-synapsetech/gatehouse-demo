@@ -11,6 +11,10 @@ const _apiBase = String.fromEnvironment(
   'GATEHOUSE_API_BASE',
   defaultValue: 'https://gatehouse-demo.onrender.com',
 );
+const _appRoleName = String.fromEnvironment(
+  'GATEHOUSE_APP_ROLE',
+  defaultValue: 'resident',
+);
 
 const _forest = Color(0xFF1B5A46);
 const _blue = Color(0xFF1D627C);
@@ -20,11 +24,19 @@ const _muted = Color(0xFF71807B);
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  if (_appRoleName == 'resident') {
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
+  }
   runApp(const GatehouseApp());
 }
 
 enum UserRole { security, resident }
+
+const _buildRole = _appRoleName == 'security'
+    ? UserRole.security
+    : UserRole.resident;
 
 extension UserRoleStyle on UserRole {
   String get label => this == UserRole.security ? 'Security' : 'Resident';
@@ -39,7 +51,7 @@ class GatehouseApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => MaterialApp(
-    title: 'Gatehouse',
+    title: 'Gatehouse ${_buildRole.label}',
     debugShowCheckedModeBanner: false,
     theme: ThemeData(
       useMaterial3: true,
@@ -281,6 +293,28 @@ class _GatehouseHomeState extends State<GatehouseHome> {
   ApiClient? _api;
   Profile? _profile;
 
+  @override
+  void initState() {
+    super.initState();
+    if (_buildRole == UserRole.resident) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        unawaited(_requestNotificationPermission());
+      });
+    }
+  }
+
+  Future<void> _requestNotificationPermission() async {
+    try {
+      await FirebaseMessaging.instance.requestPermission(
+        alert: true,
+        badge: true,
+        sound: true,
+      );
+    } on FirebaseException {
+      // The resident app remains usable if notification permission is unavailable.
+    }
+  }
+
   Future<void> _signIn(
     String username,
     String password,
@@ -327,12 +361,13 @@ class _GatehouseHomeState extends State<GatehouseHome> {
     if (api != null && profile != null) {
       return DashboardScreen(api: api, profile: profile, onSignOut: _signOut);
     }
-    return SignInScreen(onSignIn: _signIn);
+    return SignInScreen(role: _buildRole, onSignIn: _signIn);
   }
 }
 
 class SignInScreen extends StatefulWidget {
-  const SignInScreen({required this.onSignIn, super.key});
+  const SignInScreen({required this.role, required this.onSignIn, super.key});
+  final UserRole role;
   final Future<void> Function(String, String, UserRole) onSignIn;
   @override
   State<SignInScreen> createState() => _SignInScreenState();
@@ -340,9 +375,10 @@ class SignInScreen extends StatefulWidget {
 
 class _SignInScreenState extends State<SignInScreen> {
   final _formKey = GlobalKey<FormState>();
-  final _username = TextEditingController(text: 'guard01');
+  late final _username = TextEditingController(
+    text: widget.role == UserRole.security ? 'guard01' : 'ananya@example.com',
+  );
   final _password = TextEditingController();
-  UserRole _role = UserRole.security;
   bool _loading = false;
   bool _showPassword = false;
   String? _error;
@@ -361,7 +397,7 @@ class _SignInScreenState extends State<SignInScreen> {
       _error = null;
     });
     try {
-      await widget.onSignIn(_username.text, _password.text, _role);
+      await widget.onSignIn(_username.text, _password.text, widget.role);
     } on ApiException catch (error) {
       if (mounted) setState(() => _error = error.message);
     } finally {
@@ -371,7 +407,8 @@ class _SignInScreenState extends State<SignInScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final color = _role.color;
+    final role = widget.role;
+    final color = role.color;
     return Scaffold(
       body: SafeArea(
         child: Center(
@@ -414,37 +451,10 @@ class _SignInScreenState extends State<SignInScreen> {
                           ),
                           const SizedBox(height: 5),
                           Text(
-                            _role.description,
+                            role.description,
                             style: const TextStyle(color: _muted),
                           ),
                           const SizedBox(height: 20),
-                          SegmentedButton<UserRole>(
-                            segments: const [
-                              ButtonSegment(
-                                value: UserRole.security,
-                                label: Text('Security'),
-                                icon: Icon(Icons.shield_outlined),
-                              ),
-                              ButtonSegment(
-                                value: UserRole.resident,
-                                label: Text('Resident'),
-                                icon: Icon(Icons.home_outlined),
-                              ),
-                            ],
-                            selected: {_role},
-                            onSelectionChanged: _loading
-                                ? null
-                                : (roles) {
-                                    setState(() {
-                                      _role = roles.first;
-                                      _username.text =
-                                          _role == UserRole.security
-                                          ? 'guard01'
-                                          : 'ananya@example.com';
-                                      _error = null;
-                                    });
-                                  },
-                          ),
                           const SizedBox(height: 20),
                           Form(
                             key: _formKey,
@@ -455,7 +465,7 @@ class _SignInScreenState extends State<SignInScreen> {
                                   autocorrect: false,
                                   textInputAction: TextInputAction.next,
                                   decoration: InputDecoration(
-                                    labelText: _role == UserRole.security
+                                    labelText: role == UserRole.security
                                         ? 'Guard ID'
                                         : 'Resident email',
                                     prefixIcon: const Icon(
@@ -605,7 +615,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Future<void> _setupPushNotifications() async {
     try {
       final messaging = FirebaseMessaging.instance;
-      final permission = await messaging.requestPermission();
+      final permission = await messaging.getNotificationSettings();
       if (permission.authorizationStatus == AuthorizationStatus.denied) return;
       final token = await messaging.getToken();
       if (token != null) {
