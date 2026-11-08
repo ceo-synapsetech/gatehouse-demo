@@ -104,7 +104,7 @@ class ApiClient {
   final String username;
   final String password;
   final HttpClient _client = HttpClient()
-    ..connectionTimeout = const Duration(seconds: 15);
+    ..connectionTimeout = const Duration(seconds: 120);
 
   Future<dynamic> _request(
     String path, {
@@ -135,6 +135,10 @@ class ApiClient {
         );
       }
       return text.isEmpty ? null : jsonDecode(text);
+    } on TimeoutException {
+      throw const ApiException(
+        'The server took too long to wake up. Wait a minute, then try again.',
+      );
     } on SocketException {
       throw const ApiException(
         'Could not connect. Check your internet connection and try again.',
