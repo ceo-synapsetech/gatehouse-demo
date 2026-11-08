@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - main
-      - codex/role-specific-apks
+      - 'codex/**'
     paths:
       - mobile/**
       - .github/workflows/build-android-apk.yml
