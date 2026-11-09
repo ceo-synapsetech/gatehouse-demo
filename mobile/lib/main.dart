@@ -67,7 +67,7 @@ Future<void> _initializeLocalNotifications({
   required bool handleLaunchDetails,
 }) async {
   await _localNotifications.initialize(
-    settings: const InitializationSettings(
+    const InitializationSettings(
       android: AndroidInitializationSettings('ic_stat_gatehouse'),
     ),
     onDidReceiveNotificationResponse: _onLocalNotificationResponse,
