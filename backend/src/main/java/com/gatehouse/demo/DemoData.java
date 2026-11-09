@@ -17,7 +17,7 @@ public class DemoData {
             }
             if (requests.count() == 0) {
                 requests.save(new AccessRequest("A-204", "Delivery / visitor", "Demo Courier", "Sample grocery delivery"));
-                AccessRequest approved = new AccessRequest("B-101", "Taking item out", "Sample Resident", "Old chair · sample item");
+                AccessRequest approved = new AccessRequest("A-101", "Taking item out", "Sample Resident", "Old chair · sample item");
                 approved.setStatus(AccessRequest.Status.APPROVED);
                 requests.save(approved);
             }

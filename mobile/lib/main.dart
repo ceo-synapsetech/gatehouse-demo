@@ -17,6 +17,10 @@ const _appRoleName = String.fromEnvironment(
   'GATEHOUSE_APP_ROLE',
   defaultValue: 'resident',
 );
+final _aWingUnits = List<String>.unmodifiable([
+  for (var floor = 1; floor <= 14; floor++)
+    for (var flat = 1; flat <= 5; flat++) 'A-${floor}0$flat',
+]);
 
 const _forest = Color(0xFF1B5A46);
 const _blue = Color(0xFF1D627C);
@@ -1076,11 +1080,14 @@ class _SignUpScreenState extends State<SignUpScreen> {
                               labelText: 'Home unit',
                               prefixIcon: Icon(Icons.home_outlined),
                             ),
-                            items: const [
-                              DropdownMenuItem(value: 'A-204', child: Text('A-204')),
-                              DropdownMenuItem(value: 'B-101', child: Text('B-101')),
-                              DropdownMenuItem(value: 'C-302', child: Text('C-302')),
-                            ],
+                            items: _aWingUnits
+                                .map(
+                                  (unit) => DropdownMenuItem(
+                                    value: unit,
+                                    child: Text(unit),
+                                  ),
+                                )
+                                .toList(),
                             onChanged: (value) {
                               if (value != null) setState(() => _unit = value);
                             },
@@ -1957,20 +1964,14 @@ class _NewRequestDialogState extends State<_NewRequestDialog> {
             DropdownButtonFormField<String>(
               initialValue: _unit,
               decoration: const InputDecoration(labelText: 'Resident / unit'),
-              items: const [
-                DropdownMenuItem(
-                  value: 'A-204',
-                  child: Text('Block A · Unit 204'),
-                ),
-                DropdownMenuItem(
-                  value: 'B-101',
-                  child: Text('Block B · Unit 101'),
-                ),
-                DropdownMenuItem(
-                  value: 'C-302',
-                  child: Text('Block C · Unit 302'),
-                ),
-              ],
+              items: _aWingUnits
+                  .map(
+                    (unit) => DropdownMenuItem(
+                      value: unit,
+                      child: Text('A-wing · Flat ${unit.substring(2)}'),
+                    ),
+                  )
+                  .toList(),
               onChanged: (value) => setState(() => _unit = value ?? _unit),
             ),
             const SizedBox(height: 12),

@@ -2,7 +2,6 @@ package com.gatehouse.demo;
 
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.regex.Pattern;
@@ -28,7 +27,7 @@ public class ApiController {
     private final AppUserRepository users;
     private final PasswordEncoder passwordEncoder;
     private final String securitySignupCode;
-    private static final Set<String> VALID_UNITS = Set.of("A-204", "B-101", "C-302");
+    private static final Pattern A_WING_UNIT = Pattern.compile("^A-(?:[1-9]|1[0-4])0[1-5]$");
     private static final Pattern USERNAME = Pattern.compile("^[a-zA-Z0-9._@+-]{3,120}$");
     private static final Pattern EMAIL = Pattern.compile("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$");
 
@@ -72,8 +71,8 @@ public class ApiController {
         String unit = null;
         if (body.role().equals("RESIDENT")) {
             unit = body.unit() == null ? "" : body.unit().trim().toUpperCase(java.util.Locale.ROOT);
-            if (!VALID_UNITS.contains(unit))
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Choose a valid home unit");
+            if (!validAUnit(unit))
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Choose an A-wing flat from 101 through 1405");
         } else {
             if (securitySignupCode.isBlank())
                 throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Security signup is not configured yet");
@@ -98,7 +97,7 @@ public class ApiController {
     }
 
     @PostMapping("/requests") public RequestView create(@RequestBody CreateRequest body) {
-        if (body.unit() == null || !VALID_UNITS.contains(body.unit()) || blank(body.kind()) || blank(body.person()) || blank(body.details()))
+        if (!validAUnit(body.unit()) || blank(body.kind()) || blank(body.person()) || blank(body.details()))
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "A valid sample unit, person, type, and details are required");
         AccessRequest saved = requests.save(new AccessRequest(body.unit(), body.kind(), body.person().trim(), body.details().trim()));
         for (AppUser resident : users.findByRoleAndUnit("RESIDENT", saved.getUnit())) {
@@ -167,6 +166,7 @@ public class ApiController {
         return users.findById(auth.getName()).orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED));
     }
     private static boolean blank(String s) { return s == null || s.isBlank() || s.length() > 500; }
+    private static boolean validAUnit(String unit) { return unit != null && A_WING_UNIT.matcher(unit).matches(); }
     private RequestView view(AccessRequest r) {
         String residentName = users.findFirstByRoleAndUnitOrderByUsernameAsc("RESIDENT", r.getUnit())
             .map(AppUser::getDisplayName).orElse("Resident");
