@@ -1,0 +1,19 @@
+name: gatehouse_alert_bridge
+description: Android foreground alert audio for Gatehouse resident approvals.
+publish_to: none
+version: 1.0.0
+
+environment:
+  sdk: '>=3.4.0 <4.0.0'
+  flutter: '>=3.3.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: com.synapsetech.gatehouse_alert_bridge
+        pluginClass: GatehouseAlertBridgePlugin
