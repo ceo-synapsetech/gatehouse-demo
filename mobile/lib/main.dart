@@ -31,10 +31,12 @@ const _muted = Color(0xFF71807B);
 const _approveActionId = 'APPROVE_VISITOR';
 const _declineActionId = 'DECLINE_VISITOR';
 const _residentNotificationChannel = AndroidNotificationChannel(
-  'resident_visitor_approvals',
-  'Visitor approvals',
-  description: 'Visitor and delivery requests waiting for your decision.',
+  'resident_visitor_alerts_v2',
+  'Urgent visitor approvals',
+  description: 'Urgent visitor requests needing your decision. Plays a gentle alert tone.',
   importance: Importance.high,
+  playSound: true,
+  enableVibration: true,
 );
 
 final FlutterLocalNotificationsPlugin _localNotifications =
@@ -165,6 +167,9 @@ Future<void> _showVisitorNotification(RemoteMessage message) async {
         channelDescription: _residentNotificationChannel.description,
         importance: Importance.high,
         priority: Priority.high,
+        playSound: true,
+        enableVibration: true,
+        color: const Color(0xFFE58A32),
         styleInformation: BigTextStyleInformation(body),
         actions: const [
           AndroidNotificationAction(
