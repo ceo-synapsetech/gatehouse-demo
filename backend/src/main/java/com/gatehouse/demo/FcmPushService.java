@@ -4,7 +4,6 @@ import com.google.auth.oauth2.GoogleCredentials;
 import com.google.firebase.FirebaseApp;
 import com.google.firebase.FirebaseOptions;
 import com.google.firebase.messaging.AndroidConfig;
-import com.google.firebase.messaging.AndroidNotification;
 import com.google.firebase.messaging.FirebaseMessaging;
 import com.google.firebase.messaging.FirebaseMessagingException;
 import com.google.firebase.messaging.Message;
@@ -22,7 +21,6 @@ import org.springframework.stereotype.Service;
 @Service
 public class FcmPushService {
     private static final Logger log = LoggerFactory.getLogger(FcmPushService.class);
-    private static final String RESIDENT_CHANNEL_ID = "resident_visitor_alerts_v2";
     private final FirebaseApp firebaseApp;
     private final DeviceRegistrationRepository deviceRegistrations;
 
@@ -58,20 +56,14 @@ public class FcmPushService {
         }
 
         for (DeviceRegistration device : devices) {
-            AndroidNotification androidNotification = AndroidNotification.builder()
-                .setTitle(notification.getTitle())
-                .setBody(notification.getMessage())
-                .setChannelId(RESIDENT_CHANNEL_ID)
-                .setDefaultSound(true)
-                .setDefaultVibrateTimings(false)
-                .setVibrateTimingsInMillis(new long[] {0, 200, 150, 200})
-                .setPriority(AndroidNotification.Priority.HIGH)
-                .build();
+            // Send a high-priority data message so the resident app's background
+            // handler can create the actionable local notification with Approve
+            // and Decline actions. An FCM notification payload is rendered by
+            // Android directly in the background and bypasses those app actions.
             Message message = Message.builder()
                 .setToken(device.getToken())
                 .setAndroidConfig(AndroidConfig.builder()
                     .setPriority(AndroidConfig.Priority.HIGH)
-                    .setNotification(androidNotification)
                     .build())
                 .putData("notificationId", notification.getId().toString())
                 .putData("requestId", notification.getRequestId().toString())
