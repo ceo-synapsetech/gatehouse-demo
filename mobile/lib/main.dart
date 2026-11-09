@@ -449,16 +449,19 @@ class Profile {
 class RegistrationResult {
   const RegistrationResult({
     required this.status,
+    required this.approvalMessage,
     required this.firstApproverUnit,
     required this.secondApproverUnit,
   });
   final String status;
+  final String approvalMessage;
   final String firstApproverUnit;
   final String secondApproverUnit;
 
   factory RegistrationResult.fromJson(Map<String, dynamic> json) =>
       RegistrationResult(
         status: json['status'] as String? ?? 'PENDING',
+        approvalMessage: json['approvalMessage'] as String? ?? 'Signup submitted for review.',
         firstApproverUnit: json['firstApproverUnit'] as String? ?? 'A-603',
         secondApproverUnit: json['secondApproverUnit'] as String? ?? 'A-104',
       );
@@ -472,6 +475,7 @@ class PendingSignup {
     this.unit,
     required this.approvedBy603,
     required this.approvedBySecond,
+    required this.initialSecondApproverAccount,
   });
 
   final String username;
@@ -480,6 +484,7 @@ class PendingSignup {
   final String? unit;
   final bool approvedBy603;
   final bool approvedBySecond;
+  final bool initialSecondApproverAccount;
 
   factory PendingSignup.fromJson(Map<String, dynamic> json) => PendingSignup(
     username: json['username'] as String? ?? '',
@@ -488,6 +493,7 @@ class PendingSignup {
     unit: json['unit'] as String?,
     approvedBy603: json['approvedBy603'] as bool? ?? false,
     approvedBySecond: json['approvedBySecond'] as bool? ?? false,
+    initialSecondApproverAccount: json['initialSecondApproverAccount'] as bool? ?? false,
   );
 }
 
@@ -1082,11 +1088,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
         Navigator.of(context).pop();
         messenger.showSnackBar(
           SnackBar(
-            content: Text(
-              registration.status == 'PENDING'
-                  ? 'Signup submitted. ${registration.firstApproverUnit} and ${registration.secondApproverUnit} must approve it before you can sign in.'
-                  : 'Account created.',
-            ),
+            content: Text(registration.approvalMessage),
           ),
         );
       }
@@ -1131,7 +1133,9 @@ class _SignUpScreenState extends State<SignUpScreen> {
                         const SizedBox(height: 6),
                         Text(
                           resident
-                              ? 'Use your email and home unit.'
+                              ? _unit == 'A-603'
+                                    ? 'Use your email and home unit. The first A-603 account uses a one-time setup code.'
+                                    : 'Use your email and home unit.'
                               : 'Enter your guard ID and administrator invite code.',
                           style: const TextStyle(color: _muted),
                         ),
@@ -1184,17 +1188,23 @@ class _SignUpScreenState extends State<SignUpScreen> {
                               if (value != null) setState(() => _unit = value);
                             },
                           ),
-                        ] else ...[
+                        ],
+                        if (!resident || _unit == 'A-603') ...[
                           const SizedBox(height: 14),
                           TextFormField(
                             controller: _inviteCode,
                             autocorrect: false,
                             obscureText: true,
-                            decoration: const InputDecoration(
-                              labelText: 'Administrator invite code',
+                            decoration: InputDecoration(
+                              labelText: resident
+                                  ? 'A-603 one-time setup code'
+                                  : 'Administrator invite code',
+                              helperText: resident
+                                  ? 'Only used to create the first A-603 account.'
+                                  : null,
                               prefixIcon: Icon(Icons.key_outlined),
                             ),
-                            validator: (value) => value == null || value.isEmpty
+                            validator: (value) => !resident && (value == null || value.isEmpty)
                                 ? 'Enter your security invite code.'
                                 : null,
                           ),
@@ -2155,6 +2165,13 @@ class _SignupApprovalsScreenState extends State<SignupApprovalsScreen> {
                           '${signup.role == 'RESIDENT' ? 'Resident' : 'Security'}${signup.unit == null ? '' : ' · ${signup.unit}'}',
                           style: const TextStyle(color: _muted),
                         ),
+                        if (signup.initialSecondApproverAccount) ...[
+                          const SizedBox(height: 8),
+                          Text(
+                            'As the first ${widget.profile.secondApproverUnit} account, A-603 approval will activate it.',
+                            style: const TextStyle(color: _muted),
+                          ),
+                        ],
                         const SizedBox(height: 12),
                         Wrap(
                           spacing: 8,

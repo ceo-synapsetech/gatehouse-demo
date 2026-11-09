@@ -32,6 +32,7 @@ Set these API environment variables in Render:
 - `CORS_ALLOWED_ORIGIN` to the exact Cloudflare Pages demo origin (for example, `https://your-project.pages.dev`)
 - `DDL_AUTO=validate`
 - `SIGNUP_SECOND_APPROVER_UNIT` to the second signup approver's A-wing flat (defaults to `A-104`; `A-603` remains the other required approver)
+- `SIGNUP_A603_BOOTSTRAP_CODE` to a strong one-time setup code for creating the first active A-603 approver account. After that account is active, new resident and security signups require A-603 and the configured second approver.
 
 Place the API and Postgres in the same Render region and use the internal database host. For a Mumbai demo, Singapore is a nearby region if available in the Render account. Keep credentials in Render environment variables; do not commit them.
 
