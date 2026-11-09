@@ -273,6 +273,7 @@ class ApiClient {
     String path, {
     String method = 'GET',
     Map<String, Object?>? body,
+    bool includeAuth = true,
   }) async {
     try {
       final request = await _client.openUrl(
@@ -280,9 +281,10 @@ class ApiClient {
         Uri.parse('$_apiBase$path'),
       );
       final basic = base64Encode(utf8.encode('$username:$password'));
-      request.headers
-        ..set(HttpHeaders.authorizationHeader, 'Basic $basic')
-        ..set(HttpHeaders.acceptHeader, 'application/json');
+      request.headers.set(HttpHeaders.acceptHeader, 'application/json');
+      if (includeAuth) {
+        request.headers.set(HttpHeaders.authorizationHeader, 'Basic $basic');
+      }
       if (body != null) {
         request.headers.contentType = ContentType.json;
         request.write(jsonEncode(body));
@@ -317,6 +319,27 @@ class ApiClient {
 
   Future<Profile> signIn() async =>
       Profile.fromJson(await _request('/api/auth/me') as Map<String, dynamic>);
+
+  Future<void> register({
+    required String displayName,
+    required String role,
+    String? unit,
+    String? inviteCode,
+  }) async {
+    await _request(
+      '/api/auth/register',
+      method: 'POST',
+      includeAuth: false,
+      body: {
+        'username': username,
+        'password': password,
+        'displayName': displayName,
+        'role': role,
+        if (unit != null) 'unit': unit,
+        if (inviteCode != null) 'inviteCode': inviteCode,
+      },
+    );
+  }
 
   Future<List<AccessRequest>> requests() async {
     final result = await _request('/api/requests') as List<dynamic>;
@@ -377,15 +400,17 @@ class ApiClient {
 }
 
 class Profile {
-  const Profile({required this.username, required this.role, this.unit});
+  const Profile({required this.username, required this.role, this.unit, this.name});
   final String username;
   final UserRole role;
   final String? unit;
+  final String? name;
 
   factory Profile.fromJson(Map<String, dynamic> json) => Profile(
     username: json['username'] as String? ?? '',
     role: json['role'] == 'RESIDENT' ? UserRole.resident : UserRole.security,
     unit: json['unit'] as String?,
+    name: json['name'] as String?,
   );
 }
 
@@ -591,6 +616,27 @@ class _GatehouseHomeState extends State<GatehouseHome> {
     }
   }
 
+  Future<void> _register(
+    String displayName,
+    String username,
+    String password,
+    String? unit,
+    String inviteCode,
+  ) async {
+    final api = ApiClient(username: username, password: password);
+    try {
+      await api.register(
+        displayName: displayName,
+        role: _buildRole == UserRole.resident ? 'RESIDENT' : 'SECURITY',
+        unit: unit,
+        inviteCode: inviteCode.isEmpty ? null : inviteCode,
+      );
+    } finally {
+      api.close();
+    }
+    await _signIn(username, password, _buildRole);
+  }
+
   Future<void> handleNotificationAction(
     _PendingNotificationAction action,
   ) async {
@@ -663,14 +709,30 @@ class _GatehouseHomeState extends State<GatehouseHome> {
         onSignOut: () => unawaited(_signOut()),
       );
     }
-    return SignInScreen(role: _buildRole, onSignIn: _signIn);
+    return SignInScreen(
+      role: _buildRole,
+      onSignIn: _signIn,
+      onRegister: _register,
+    );
   }
 }
 
 class SignInScreen extends StatefulWidget {
-  const SignInScreen({required this.role, required this.onSignIn, super.key});
+  const SignInScreen({
+    required this.role,
+    required this.onSignIn,
+    required this.onRegister,
+    super.key,
+  });
   final UserRole role;
   final Future<void> Function(String, String, UserRole) onSignIn;
+  final Future<void> Function(
+    String,
+    String,
+    String,
+    String?,
+    String,
+  ) onRegister;
   @override
   State<SignInScreen> createState() => _SignInScreenState();
 }
@@ -843,6 +905,20 @@ class _SignInScreenState extends State<SignInScreen> {
                                 : const Icon(Icons.arrow_forward_rounded),
                             label: Text(_loading ? 'Signing in…' : 'Continue'),
                           ),
+                          const SizedBox(height: 4),
+                          TextButton(
+                            onPressed: _loading
+                                ? null
+                                : () => Navigator.of(context).push<void>(
+                                    MaterialPageRoute<void>(
+                                      builder: (_) => SignUpScreen(
+                                        role: role,
+                                        onRegister: widget.onRegister,
+                                      ),
+                                    ),
+                                  ),
+                            child: const Text('New to Gatehouse? Create account'),
+                          ),
                         ],
                       ),
                     ),
@@ -854,6 +930,232 @@ class _SignInScreenState extends State<SignInScreen> {
                     style: TextStyle(color: _muted, fontSize: 11),
                   ),
                 ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class SignUpScreen extends StatefulWidget {
+  const SignUpScreen({required this.role, required this.onRegister, super.key});
+
+  final UserRole role;
+  final Future<void> Function(
+    String,
+    String,
+    String,
+    String?,
+    String,
+  ) onRegister;
+
+  @override
+  State<SignUpScreen> createState() => _SignUpScreenState();
+}
+
+class _SignUpScreenState extends State<SignUpScreen> {
+  final _formKey = GlobalKey<FormState>();
+  final _name = TextEditingController();
+  final _username = TextEditingController();
+  final _password = TextEditingController();
+  final _confirmPassword = TextEditingController();
+  final _inviteCode = TextEditingController();
+  String _unit = 'A-204';
+  bool _loading = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _username.dispose();
+    _password.dispose();
+    _confirmPassword.dispose();
+    _inviteCode.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    final username = widget.role == UserRole.resident
+        ? _username.text.trim().toLowerCase()
+        : _username.text.trim();
+    try {
+      await widget.onRegister(
+        _name.text.trim(),
+        username,
+        _password.text,
+        widget.role == UserRole.resident ? _unit : null,
+        _inviteCode.text.trim(),
+      );
+      if (mounted) Navigator.of(context).pop();
+    } on ApiException catch (error) {
+      if (mounted) setState(() => _error = error.message);
+    } catch (_) {
+      if (mounted) {
+        setState(() => _error = 'Could not create the account. Please try again.');
+      }
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final resident = widget.role == UserRole.resident;
+    final accent = widget.role.color;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Create account')),
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(22),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 440),
+              child: Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Form(
+                    key: _formKey,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(
+                          'Create ${resident ? 'resident' : 'security'} account',
+                          style: Theme.of(context)
+                              .textTheme
+                              .headlineSmall
+                              ?.copyWith(fontWeight: FontWeight.w800),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          resident
+                              ? 'Use your email and home unit.'
+                              : 'Enter your guard ID and administrator invite code.',
+                          style: const TextStyle(color: _muted),
+                        ),
+                        const SizedBox(height: 20),
+                        TextFormField(
+                          controller: _name,
+                          textCapitalization: TextCapitalization.words,
+                          decoration: const InputDecoration(
+                            labelText: 'Full name',
+                            prefixIcon: Icon(Icons.badge_outlined),
+                          ),
+                          validator: (value) => value == null || value.trim().length < 2
+                              ? 'Enter your full name.'
+                              : null,
+                        ),
+                        const SizedBox(height: 14),
+                        TextFormField(
+                          controller: _username,
+                          autocorrect: false,
+                          keyboardType: resident
+                              ? TextInputType.emailAddress
+                              : TextInputType.text,
+                          decoration: InputDecoration(
+                            labelText: resident ? 'Email address' : 'Guard ID',
+                            prefixIcon: const Icon(Icons.person_outline),
+                          ),
+                          validator: (value) => value == null || value.trim().length < 3
+                              ? resident
+                                  ? 'Enter your email address.'
+                                  : 'Enter your guard ID.'
+                              : null,
+                        ),
+                        if (resident) ...[
+                          const SizedBox(height: 14),
+                          DropdownButtonFormField<String>(
+                            initialValue: _unit,
+                            decoration: const InputDecoration(
+                              labelText: 'Home unit',
+                              prefixIcon: Icon(Icons.home_outlined),
+                            ),
+                            items: const [
+                              DropdownMenuItem(value: 'A-204', child: Text('A-204')),
+                              DropdownMenuItem(value: 'B-101', child: Text('B-101')),
+                              DropdownMenuItem(value: 'C-302', child: Text('C-302')),
+                            ],
+                            onChanged: (value) {
+                              if (value != null) setState(() => _unit = value);
+                            },
+                          ),
+                        ] else ...[
+                          const SizedBox(height: 14),
+                          TextFormField(
+                            controller: _inviteCode,
+                            autocorrect: false,
+                            obscureText: true,
+                            decoration: const InputDecoration(
+                              labelText: 'Administrator invite code',
+                              prefixIcon: Icon(Icons.key_outlined),
+                            ),
+                            validator: (value) => value == null || value.isEmpty
+                                ? 'Enter your security invite code.'
+                                : null,
+                          ),
+                        ],
+                        const SizedBox(height: 14),
+                        TextFormField(
+                          controller: _password,
+                          obscureText: true,
+                          decoration: const InputDecoration(
+                            labelText: 'Password',
+                            prefixIcon: Icon(Icons.lock_outline),
+                          ),
+                          validator: (value) => value == null || value.length < 8
+                              ? 'Use at least 8 characters.'
+                              : null,
+                        ),
+                        const SizedBox(height: 14),
+                        TextFormField(
+                          controller: _confirmPassword,
+                          obscureText: true,
+                          textInputAction: TextInputAction.done,
+                          onFieldSubmitted: (_) => _submit(),
+                          decoration: const InputDecoration(
+                            labelText: 'Confirm password',
+                            prefixIcon: Icon(Icons.lock_outline),
+                          ),
+                          validator: (value) => value != _password.text
+                              ? 'Passwords do not match.'
+                              : null,
+                        ),
+                        if (_error != null) ...[
+                          const SizedBox(height: 14),
+                          Text(
+                            _error!,
+                            style: const TextStyle(color: Color(0xFF9D483C)),
+                          ),
+                        ],
+                        const SizedBox(height: 20),
+                        FilledButton.icon(
+                          onPressed: _loading ? null : _submit,
+                          style: FilledButton.styleFrom(
+                            backgroundColor: accent,
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                          ),
+                          icon: _loading
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : const Icon(Icons.person_add_alt_1_rounded),
+                          label: Text(_loading ? 'Creating account…' : 'Create account'),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
               ),
             ),
           ),
@@ -1176,7 +1478,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final userName = widget.profile.username.split('@').first;
+    final userName = widget.profile.name ?? widget.profile.username.split('@').first;
     final name = userName.isEmpty
         ? 'Resident'
         : '${userName[0].toUpperCase()}${userName.substring(1)}';
