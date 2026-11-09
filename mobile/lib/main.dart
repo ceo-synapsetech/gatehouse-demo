@@ -7,6 +7,7 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:flutter/services.dart';
 import 'firebase_options.dart';
 
 const _apiBase = String.fromEnvironment(
@@ -52,6 +53,34 @@ _PendingNotificationAction? _pendingNotificationAction;
 bool _openNotificationsAfterSignIn = false;
 int? _pendingApprovalRequestId;
 Future<void> _residentServicesReady = Future<void>.value();
+const MethodChannel _visitorAlertChannel =
+    MethodChannel('com.synapsetech.gatehouse/visitor_alert');
+
+Future<void> _startPersistentVisitorAlert(
+  int requestId,
+  String title,
+  String body,
+) async {
+  if (!Platform.isAndroid) return;
+  try {
+    await _visitorAlertChannel.invokeMethod<void>('start', {
+      'requestId': requestId,
+      'title': title,
+      'body': body,
+    });
+  } catch (error) {
+    debugPrint('Could not start persistent visitor alert: $error');
+  }
+}
+
+Future<void> _stopPersistentVisitorAlert() async {
+  if (!Platform.isAndroid) return;
+  try {
+    await _visitorAlertChannel.invokeMethod<void>('stop');
+  } catch (error) {
+    debugPrint('Could not stop persistent visitor alert: $error');
+  }
+}
 
 class _PendingNotificationAction {
   const _PendingNotificationAction({
@@ -106,6 +135,7 @@ void _onLocalNotificationResponse(NotificationResponse response) {
     final requestId = int.tryParse(payload['requestId']?.toString() ?? '');
     final notificationId =
         int.tryParse(payload['notificationId']?.toString() ?? '');
+    unawaited(_stopPersistentVisitorAlert());
 
     if (response.actionId == _approveActionId ||
         response.actionId == _declineActionId) {
@@ -198,6 +228,7 @@ Future<void> _showVisitorNotification(RemoteMessage message) async {
     ),
     payload: payload,
   );
+  await _startPersistentVisitorAlert(requestId, title, body);
 }
 
 void main() {
@@ -778,6 +809,7 @@ class _GatehouseHomeState extends State<GatehouseHome> {
   ) async {
     try {
       await api.decide(action.requestId, action.status);
+      await _stopPersistentVisitorAlert();
       final notificationId = action.notificationId;
       if (notificationId != null) {
         await api.markNotificationRead(notificationId);
@@ -1586,6 +1618,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     setState(() => _working = true);
     try {
       await widget.api.decide(request.id, status);
+      await _stopPersistentVisitorAlert();
       await _loadRequests();
       if (mounted)
         _notice(
