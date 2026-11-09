@@ -1,7 +1,7 @@
 name: gatehouse_mobile
 description: Gatehouse access requests for residents and security staff.
 publish_to: none
-version: 1.0.0+1
+version: 1.0.1+2
 
 environment:
   sdk: '>=3.4.0 <4.0.0'
@@ -12,6 +12,7 @@ dependencies:
   firebase_core: ^5.1.0
   firebase_messaging: ^17.0.1
   flutter_local_notifications: ^19.5.0
+  flutter_secure_storage: ^11.2.0
 
 flutter:
   uses-material-design: true

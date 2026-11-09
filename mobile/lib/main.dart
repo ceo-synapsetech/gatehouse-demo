@@ -6,6 +6,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'firebase_options.dart';
 
 const _apiBase = String.fromEnvironment(
@@ -34,6 +35,9 @@ const _residentNotificationChannel = AndroidNotificationChannel(
 
 final FlutterLocalNotificationsPlugin _localNotifications =
     FlutterLocalNotificationsPlugin();
+const FlutterSecureStorage _secureStorage = FlutterSecureStorage();
+const _savedUsernameKey = 'gatehouse.username';
+const _savedPasswordKey = 'gatehouse.password';
 final GlobalKey<_GatehouseHomeState> _gatehouseHomeKey =
     GlobalKey<_GatehouseHomeState>();
 final GlobalKey<_DashboardScreenState> _dashboardKey =
@@ -455,10 +459,12 @@ class GatehouseHome extends StatefulWidget {
 class _GatehouseHomeState extends State<GatehouseHome> {
   ApiClient? _api;
   Profile? _profile;
+  int _sessionGeneration = 0;
 
   @override
   void initState() {
     super.initState();
+    unawaited(_restoreSession());
     if (_buildRole == UserRole.resident) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         unawaited(_requestNotificationPermission());
@@ -478,11 +484,81 @@ class _GatehouseHomeState extends State<GatehouseHome> {
     }
   }
 
+  Future<void> _restoreSession() async {
+    final generation = _sessionGeneration;
+    String? username;
+    String? password;
+    try {
+      username = await _secureStorage.read(key: _savedUsernameKey);
+      password = await _secureStorage.read(key: _savedPasswordKey);
+    } catch (_) {
+      return;
+    }
+    if (generation != _sessionGeneration) return;
+    if (username == null || password == null) return;
+
+    final api = ApiClient(username: username, password: password);
+    try {
+      final profile = await api.signIn();
+      if (generation != _sessionGeneration) {
+        api.close();
+        return;
+      }
+      if (profile.role != _buildRole) {
+        await _clearSavedSession();
+        api.close();
+        return;
+      }
+      if (!mounted) {
+        api.close();
+        return;
+      }
+      setState(() {
+        _api = api;
+        _profile = profile;
+      });
+      _afterSignIn(api, profile);
+    } on ApiException catch (error) {
+      api.close();
+      if (generation == _sessionGeneration &&
+          error.message == 'Those credentials were not accepted.') {
+        await _clearSavedSession();
+      }
+    } catch (_) {
+      api.close();
+    }
+  }
+
+  Future<void> _saveSession(String username, String password) async {
+    await _secureStorage.write(key: _savedUsernameKey, value: username);
+    await _secureStorage.write(key: _savedPasswordKey, value: password);
+  }
+
+  Future<void> _clearSavedSession() async {
+    await _secureStorage.delete(key: _savedUsernameKey);
+    await _secureStorage.delete(key: _savedPasswordKey);
+  }
+
+  void _afterSignIn(ApiClient api, Profile profile) {
+    if (profile.role != UserRole.resident) return;
+    final pendingAction = _pendingNotificationAction;
+    if (pendingAction != null) {
+      _pendingNotificationAction = null;
+      unawaited(_applyNotificationAction(api, pendingAction));
+    } else if (_openNotificationsAfterSignIn) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _openNotificationsAfterSignIn = false;
+        _dashboardKey.currentState?.openNotificationsFromPush();
+      });
+    }
+  }
+
   Future<void> _signIn(
     String username,
     String password,
     UserRole selectedRole,
   ) async {
+    _sessionGeneration++;
     final api = ApiClient(username: username.trim(), password: password);
     try {
       final profile = await api.signIn();
@@ -496,22 +572,16 @@ class _GatehouseHomeState extends State<GatehouseHome> {
         api.close();
         return;
       }
+      try {
+        await _saveSession(username.trim(), password);
+      } catch (_) {
+        // Keep this sign-in usable if secure storage is temporarily unavailable.
+      }
       setState(() {
         _api = api;
         _profile = profile;
       });
-      if (profile.role == UserRole.resident) {
-        final pendingAction = _pendingNotificationAction;
-        if (pendingAction != null) {
-          _pendingNotificationAction = null;
-          unawaited(_applyNotificationAction(api, pendingAction));
-        } else if (_openNotificationsAfterSignIn) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            _openNotificationsAfterSignIn = false;
-            _dashboardKey.currentState?.openNotificationsFromPush();
-          });
-        }
-      }
+      _afterSignIn(api, profile);
     } on ApiException {
       api.close();
       rethrow;
@@ -562,12 +632,23 @@ class _GatehouseHomeState extends State<GatehouseHome> {
     }
   }
 
-  void _signOut() {
+  Future<void> _signOut() async {
     _api?.close();
     setState(() {
       _api = null;
       _profile = null;
     });
+    try {
+      await _clearSavedSession();
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Could not clear the saved sign-in from this device.'),
+          ),
+        );
+      }
+    }
   }
 
   @override
@@ -579,7 +660,7 @@ class _GatehouseHomeState extends State<GatehouseHome> {
         key: _dashboardKey,
         api: api,
         profile: profile,
-        onSignOut: _signOut,
+        onSignOut: () => unawaited(_signOut()),
       );
     }
     return SignInScreen(role: _buildRole, onSignIn: _signIn);
