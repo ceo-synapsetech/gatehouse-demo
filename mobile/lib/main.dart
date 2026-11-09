@@ -324,13 +324,13 @@ class ApiClient {
   Future<Profile> signIn() async =>
       Profile.fromJson(await _request('/api/auth/me') as Map<String, dynamic>);
 
-  Future<void> register({
+  Future<String> register({
     required String displayName,
     required String role,
     String? unit,
     String? inviteCode,
   }) async {
-    await _request(
+    final result = await _request(
       '/api/auth/register',
       method: 'POST',
       includeAuth: false,
@@ -343,6 +343,23 @@ class ApiClient {
         if (inviteCode != null) 'inviteCode': inviteCode,
       },
     );
+    return (result as Map<String, dynamic>)['status'] as String? ?? 'PENDING';
+  }
+
+  Future<List<PendingSignup>> pendingSignups() async {
+    final result = await _request('/api/admin/signups/pending') as List<dynamic>;
+    return result
+        .map((item) => PendingSignup.fromJson(item as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<SignupDecision> reviewSignup(String username, String decision) async {
+    final result = await _request(
+      '/api/admin/signups/decision',
+      method: 'POST',
+      body: {'username': username, 'decision': decision},
+    ) as Map<String, dynamic>;
+    return SignupDecision.fromJson(result);
   }
 
   Future<List<AccessRequest>> requests() async {
@@ -404,18 +421,61 @@ class ApiClient {
 }
 
 class Profile {
-  const Profile({required this.username, required this.role, this.unit, this.name});
+  const Profile({
+    required this.username,
+    required this.role,
+    this.unit,
+    this.name,
+    this.canApproveSignups = false,
+  });
   final String username;
   final UserRole role;
   final String? unit;
   final String? name;
+  final bool canApproveSignups;
 
   factory Profile.fromJson(Map<String, dynamic> json) => Profile(
     username: json['username'] as String? ?? '',
     role: json['role'] == 'RESIDENT' ? UserRole.resident : UserRole.security,
     unit: json['unit'] as String?,
     name: json['name'] as String?,
+    canApproveSignups: json['canApproveSignups'] == 'true',
   );
+}
+
+class PendingSignup {
+  const PendingSignup({
+    required this.username,
+    required this.displayName,
+    required this.role,
+    this.unit,
+    required this.approvedBy603,
+    required this.approvedBy101,
+  });
+
+  final String username;
+  final String displayName;
+  final String role;
+  final String? unit;
+  final bool approvedBy603;
+  final bool approvedBy101;
+
+  factory PendingSignup.fromJson(Map<String, dynamic> json) => PendingSignup(
+    username: json['username'] as String? ?? '',
+    displayName: json['displayName'] as String? ?? '',
+    role: json['role'] as String? ?? '',
+    unit: json['unit'] as String?,
+    approvedBy603: json['approvedBy603'] as bool? ?? false,
+    approvedBy101: json['approvedBy101'] as bool? ?? false,
+  );
+}
+
+class SignupDecision {
+  const SignupDecision({required this.status});
+  final String status;
+
+  factory SignupDecision.fromJson(Map<String, dynamic> json) =>
+      SignupDecision(status: json['status'] as String? ?? 'PENDING');
 }
 
 class AccessRequest {
@@ -620,7 +680,7 @@ class _GatehouseHomeState extends State<GatehouseHome> {
     }
   }
 
-  Future<void> _register(
+  Future<String> _register(
     String displayName,
     String username,
     String password,
@@ -629,7 +689,7 @@ class _GatehouseHomeState extends State<GatehouseHome> {
   ) async {
     final api = ApiClient(username: username, password: password);
     try {
-      await api.register(
+      return await api.register(
         displayName: displayName,
         role: _buildRole == UserRole.resident ? 'RESIDENT' : 'SECURITY',
         unit: unit,
@@ -638,7 +698,6 @@ class _GatehouseHomeState extends State<GatehouseHome> {
     } finally {
       api.close();
     }
-    await _signIn(username, password, _buildRole);
   }
 
   Future<void> handleNotificationAction(
@@ -730,7 +789,7 @@ class SignInScreen extends StatefulWidget {
   });
   final UserRole role;
   final Future<void> Function(String, String, UserRole) onSignIn;
-  final Future<void> Function(
+  final Future<String> Function(
     String,
     String,
     String,
@@ -947,7 +1006,7 @@ class SignUpScreen extends StatefulWidget {
   const SignUpScreen({required this.role, required this.onRegister, super.key});
 
   final UserRole role;
-  final Future<void> Function(
+  final Future<String> Function(
     String,
     String,
     String,
@@ -990,14 +1049,26 @@ class _SignUpScreenState extends State<SignUpScreen> {
         ? _username.text.trim().toLowerCase()
         : _username.text.trim();
     try {
-      await widget.onRegister(
+      final status = await widget.onRegister(
         _name.text.trim(),
         username,
         _password.text,
         widget.role == UserRole.resident ? _unit : null,
         _inviteCode.text.trim(),
       );
-      if (mounted) Navigator.of(context).pop();
+      if (mounted) {
+        final messenger = ScaffoldMessenger.of(context);
+        Navigator.of(context).pop();
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(
+              status == 'PENDING'
+                  ? 'Signup submitted. Both A-603 and A-101 must approve it before you can sign in.'
+                  : 'Account created.',
+            ),
+          ),
+        );
+      }
     } on ApiException catch (error) {
       if (mounted) setState(() => _error = error.message);
     } catch (_) {
@@ -1483,6 +1554,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
+  Future<void> _openSignupApprovals() => Navigator.of(context).push<void>(
+    MaterialPageRoute<void>(
+      builder: (_) => SignupApprovalsScreen(
+        api: widget.api,
+        profile: widget.profile,
+      ),
+    ),
+  );
+
   @override
   Widget build(BuildContext context) {
     final userName = widget.profile.name ?? widget.profile.username.split('@').first;
@@ -1532,10 +1612,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
             onSelected: (value) {
               if (value == 'profile') _showProfile();
               if (value == 'settings') _showSettings();
+              if (value == 'signups') _openSignupApprovals();
               if (value == 'logout') _signOut();
             },
-            itemBuilder: (context) => const [
-              PopupMenuItem(
+            itemBuilder: (context) => [
+              if (widget.profile.canApproveSignups)
+                const PopupMenuItem(
+                  value: 'signups',
+                  child: ListTile(
+                    leading: Icon(Icons.admin_panel_settings_outlined),
+                    title: Text('Signup approvals'),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+              const PopupMenuItem(
                 value: 'profile',
                 child: ListTile(
                   leading: Icon(Icons.person_outline),
@@ -1543,7 +1633,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   contentPadding: EdgeInsets.zero,
                 ),
               ),
-              PopupMenuItem(
+              const PopupMenuItem(
                 value: 'settings',
                 child: ListTile(
                   leading: Icon(Icons.tune_rounded),
@@ -1551,7 +1641,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   contentPadding: EdgeInsets.zero,
                 ),
               ),
-              PopupMenuItem(
+              const PopupMenuItem(
                 value: 'logout',
                 child: ListTile(
                   leading: Icon(Icons.logout_rounded),
@@ -1906,6 +1996,204 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ),
     );
   }
+}
+
+class SignupApprovalsScreen extends StatefulWidget {
+  const SignupApprovalsScreen({
+    required this.api,
+    required this.profile,
+    super.key,
+  });
+
+  final ApiClient api;
+  final Profile profile;
+
+  @override
+  State<SignupApprovalsScreen> createState() => _SignupApprovalsScreenState();
+}
+
+class _SignupApprovalsScreenState extends State<SignupApprovalsScreen> {
+  List<PendingSignup> _signups = [];
+  bool _loading = true;
+  String? _error;
+  String? _workingUsername;
+
+  String get _approverUnit => widget.profile.unit ?? '';
+
+  bool _approvedByMe(PendingSignup signup) => _approverUnit == 'A-603'
+      ? signup.approvedBy603
+      : signup.approvedBy101;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSignups();
+  }
+
+  Future<void> _loadSignups() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final signups = await widget.api.pendingSignups();
+      if (mounted) setState(() => _signups = signups);
+    } on ApiException catch (error) {
+      if (mounted) setState(() => _error = error.message);
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _review(PendingSignup signup, String decision) async {
+    setState(() => _workingUsername = signup.username);
+    try {
+      final result = await widget.api.reviewSignup(signup.username, decision);
+      await _loadSignups();
+      if (mounted) {
+        final message = decision == 'REJECT'
+            ? 'Signup rejected.'
+            : result.status == 'ACTIVE'
+            ? 'Both approvals are complete. The account is active.'
+            : 'Approval recorded. Waiting for the other approver.';
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(message)),
+        );
+      }
+    } on ApiException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(error.message)),
+        );
+      }
+      await _loadSignups();
+    } finally {
+      if (mounted) setState(() => _workingUsername = null);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(
+      title: const Text('Signup approvals'),
+      actions: [
+        IconButton(
+          tooltip: 'Refresh',
+          onPressed: _loadSignups,
+          icon: const Icon(Icons.refresh_rounded),
+        ),
+      ],
+    ),
+    body: _loading && _signups.isEmpty
+        ? const Center(child: CircularProgressIndicator())
+        : _error != null && _signups.isEmpty
+        ? Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(_error!, textAlign: TextAlign.center),
+                  const SizedBox(height: 12),
+                  FilledButton(
+                    onPressed: _loadSignups,
+                    child: const Text('Try again'),
+                  ),
+                ],
+              ),
+            ),
+          )
+        : _signups.isEmpty
+        ? const Center(child: Text('No signups are waiting for approval.'))
+        : RefreshIndicator(
+            onRefresh: _loadSignups,
+            child: ListView.builder(
+              padding: const EdgeInsets.all(16),
+              itemCount: _signups.length,
+              itemBuilder: (context, index) {
+                final signup = _signups[index];
+                final approvedByMe = _approvedByMe(signup);
+                final isWorking = _workingUsername == signup.username;
+                return Card(
+                  margin: const EdgeInsets.only(bottom: 12),
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          signup.displayName,
+                          style: const TextStyle(
+                            fontSize: 17,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(signup.username),
+                        Text(
+                          '${signup.role == 'RESIDENT' ? 'Resident' : 'Security'}${signup.unit == null ? '' : ' · ${signup.unit}'}',
+                          style: const TextStyle(color: _muted),
+                        ),
+                        const SizedBox(height: 12),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            _approvalStatus('A-603', signup.approvedBy603),
+                            _approvalStatus('A-101', signup.approvedBy101),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                onPressed: isWorking
+                                    ? null
+                                    : () => _review(signup, 'REJECT'),
+                                icon: const Icon(Icons.close_rounded),
+                                label: const Text('Reject'),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: FilledButton.icon(
+                                onPressed: isWorking || approvedByMe
+                                    ? null
+                                    : () => _review(signup, 'APPROVE'),
+                                icon: isWorking
+                                    ? const SizedBox(
+                                        width: 16,
+                                        height: 16,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                        ),
+                                      )
+                                    : const Icon(Icons.check_rounded),
+                                label: Text(
+                                  approvedByMe ? 'Approved by you' : 'Approve',
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+  );
+
+  Widget _approvalStatus(String unit, bool approved) => Chip(
+    avatar: Icon(
+      approved ? Icons.check_circle : Icons.schedule,
+      size: 18,
+      color: approved ? _forest : _muted,
+    ),
+    label: Text('$unit ${approved ? 'approved' : 'pending'}'),
+  );
 }
 
 class _NewRequestData {

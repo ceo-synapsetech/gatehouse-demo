@@ -52,6 +52,7 @@ public class ApiController {
         result.put("role", account.getRole());
         result.put("name", account.getDisplayName());
         if (account.getUnit() != null) result.put("unit", account.getUnit());
+        result.put("canApproveSignups", Boolean.toString(isSignupApprover(account)));
         return result;
     }
 
@@ -84,8 +85,34 @@ public class ApiController {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "An account already exists with that ID");
 
         users.save(new AppUser(username, passwordEncoder.encode(body.password()), body.role(),
-            body.displayName().trim(), unit));
-        return Map.of("status", "created", "username", username);
+            body.displayName().trim(), unit, "PENDING"));
+        return Map.of("status", "PENDING", "username", username);
+    }
+
+    @GetMapping("/admin/signups/pending") public List<PendingSignupView> pendingSignups(Authentication auth) {
+        requireSignupApprover(auth);
+        return users.findByApprovalStatusOrderByUsernameAsc("PENDING").stream()
+            .map(ApiController::pendingSignupView).toList();
+    }
+
+    @PostMapping("/admin/signups/decision") public SignupDecisionView decideSignup(@RequestBody SignupReview body, Authentication auth) {
+        AppUser approver = requireSignupApprover(auth);
+        AppUser candidate = users.findById(body.username() == null ? "" : body.username())
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Signup not found"));
+        if (!"PENDING".equals(candidate.getApprovalStatus()))
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "This signup has already been reviewed");
+        if ("APPROVE".equals(body.decision())) {
+            if (("A-603".equals(approver.getUnit()) && candidate.isApprovedBy603()) ||
+                    ("A-101".equals(approver.getUnit()) && candidate.isApprovedBy101()))
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "Your approval is already recorded");
+            candidate.approveBy(approver.getUnit());
+        } else if ("REJECT".equals(body.decision())) {
+            candidate.reject();
+        } else {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Choose approve or reject");
+        }
+        AppUser saved = users.save(candidate);
+        return new SignupDecisionView(saved.getUsername(), saved.getApprovalStatus(), saved.isApprovedBy603(), saved.isApprovedBy101());
     }
 
     @GetMapping("/requests") public List<RequestView> list(Authentication auth) {
@@ -165,6 +192,15 @@ public class ApiController {
     private AppUser account(Authentication auth) {
         return users.findById(auth.getName()).orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED));
     }
+    private static boolean isSignupApprover(AppUser account) {
+        return "RESIDENT".equals(account.getRole()) && account.isEnabled() &&
+            ("A-603".equals(account.getUnit()) || "A-101".equals(account.getUnit()));
+    }
+    private AppUser requireSignupApprover(Authentication auth) {
+        AppUser approver = account(auth);
+        if (!isSignupApprover(approver)) throw new ResponseStatusException(HttpStatus.FORBIDDEN);
+        return approver;
+    }
     private static boolean blank(String s) { return s == null || s.isBlank() || s.length() > 500; }
     private static boolean validAUnit(String unit) { return unit != null && A_WING_UNIT.matcher(unit).matches(); }
     private RequestView view(AccessRequest r) {
@@ -175,9 +211,15 @@ public class ApiController {
     private static NotificationView notificationView(AppNotification n) {
         return new NotificationView(n.getId(), n.getRequestId(), n.getTitle(), n.getMessage(), n.getCreatedAt(), n.getReadAt());
     }
+    private static PendingSignupView pendingSignupView(AppUser user) {
+        return new PendingSignupView(user.getUsername(), user.getDisplayName(), user.getRole(), user.getUnit(), user.isApprovedBy603(), user.isApprovedBy101());
+    }
     public record CreateRequest(String unit, String kind, String person, String details) {}
     public record DeviceRequest(String token) {}
     public record RegisterAccount(String username, String password, String displayName, String role, String unit, String inviteCode) {}
+    public record SignupReview(String username, String decision) {}
+    public record PendingSignupView(String username, String displayName, String role, String unit, boolean approvedBy603, boolean approvedBy101) {}
+    public record SignupDecisionView(String username, String status, boolean approvedBy603, boolean approvedBy101) {}
     public record Decision(String status) {}
     public record RequestView(Long id, String unit, String residentName, String kind, String person, String details, AccessRequest.Status status, java.time.Instant createdAt) {}
     public record NotificationView(Long id, Long requestId, String title, String message, java.time.Instant createdAt, java.time.Instant readAt) {}

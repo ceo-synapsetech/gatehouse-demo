@@ -27,14 +27,29 @@ public class AppUser {
     @Column(nullable = false)
     private boolean enabled = true;
 
+    @Column(name = "approval_status", length = 16)
+    private String approvalStatus = "ACTIVE";
+
+    @Column(name = "approved_by_603")
+    private Boolean approvedBy603 = false;
+
+    @Column(name = "approved_by_101")
+    private Boolean approvedBy101 = false;
+
     protected AppUser() {}
 
     public AppUser(String username, String passwordHash, String role, String displayName, String unit) {
+        this(username, passwordHash, role, displayName, unit, "ACTIVE");
+    }
+
+    public AppUser(String username, String passwordHash, String role, String displayName, String unit, String approvalStatus) {
         this.username = username;
         this.passwordHash = passwordHash;
         this.role = role;
         this.displayName = displayName;
         this.unit = unit;
+        this.approvalStatus = approvalStatus;
+        this.enabled = "ACTIVE".equals(approvalStatus);
     }
 
     public String getUsername() { return username; }
@@ -42,5 +57,22 @@ public class AppUser {
     public String getRole() { return role; }
     public String getDisplayName() { return displayName; }
     public String getUnit() { return unit; }
-    public boolean isEnabled() { return enabled; }
+    public String getApprovalStatus() { return approvalStatus == null ? "ACTIVE" : approvalStatus; }
+    public boolean isEnabled() { return enabled && "ACTIVE".equals(getApprovalStatus()); }
+    public boolean isApprovedBy603() { return Boolean.TRUE.equals(approvedBy603); }
+    public boolean isApprovedBy101() { return Boolean.TRUE.equals(approvedBy101); }
+
+    public void approveBy(String unit) {
+        if ("A-603".equals(unit)) approvedBy603 = true;
+        if ("A-101".equals(unit)) approvedBy101 = true;
+        if (isApprovedBy603() && isApprovedBy101()) {
+            approvalStatus = "ACTIVE";
+            enabled = true;
+        }
+    }
+
+    public void reject() {
+        approvalStatus = "REJECTED";
+        enabled = false;
+    }
 }
