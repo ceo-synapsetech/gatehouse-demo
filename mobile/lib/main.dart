@@ -1515,6 +1515,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       _notice('This visitor request has already been resolved.');
       return;
     }
+    final visitor = request;
 
     await showDialog<void>(
       context: context,
@@ -1525,14 +1526,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              '${request!.person} · ${request.kind}',
+              '${visitor.person} · ${visitor.kind}',
               style: const TextStyle(fontWeight: FontWeight.w800),
             ),
             const SizedBox(height: 8),
-            Text('Unit ${request.unit}'),
-            if (request.details.isNotEmpty) ...[
+            Text('Unit ${visitor.unit}'),
+            if (visitor.details.isNotEmpty) ...[
               const SizedBox(height: 8),
-              Text(request.details),
+              Text(visitor.details),
             ],
             const SizedBox(height: 12),
             const Text('Do you approve this visitor?'),
@@ -1548,7 +1549,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 ? null
                 : () {
                     Navigator.of(dialogContext).pop();
-                    unawaited(_decide(request!, 'DENIED'));
+                    unawaited(_decide(visitor, 'DENIED'));
                   },
             child: const Text('Decline'),
           ),
@@ -1557,7 +1558,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 ? null
                 : () {
                     Navigator.of(dialogContext).pop();
-                    unawaited(_decide(request!, 'APPROVED'));
+                    unawaited(_decide(visitor, 'APPROVED'));
                   },
             child: const Text('Approve'),
           ),
