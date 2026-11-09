@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108" role="img" aria-label="Gatehouse shield and entryway">
+  <rect width="108" height="108" rx="24" fill="#1B5A46"/>
+  <path d="M54 10 86 23v25c0 22-12 38-32 50C34 86 22 70 22 48V23l32-13Z" fill="#fff"/>
+  <path d="m54 27 22 16v28h-9V49H41v22h-9V43l22-16Z" fill="#1B5A46"/>
+  <path d="M49 54h10v17H49z" fill="#1D627C"/>
+  <path d="M28 77h52" stroke="#1D627C" stroke-width="4" stroke-linecap="round"/>
+</svg>

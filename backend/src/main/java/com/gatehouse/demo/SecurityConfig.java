@@ -10,9 +10,9 @@ import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.core.userdetails.User;
 import org.springframework.security.core.userdetails.UserDetailsService;
+import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
-import org.springframework.security.provisioning.InMemoryUserDetailsManager;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
@@ -21,11 +21,14 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 public class SecurityConfig {
     @Bean PasswordEncoder passwordEncoder() { return new BCryptPasswordEncoder(); }
 
-    @Bean UserDetailsService users(PasswordEncoder encoder) {
-        return new InMemoryUserDetailsManager(
-            User.withUsername("guard01").password(encoder.encode("demo123")).roles("SECURITY").build(),
-            User.withUsername("ananya@example.com").password(encoder.encode("demo123")).roles("RESIDENT").build()
-        );
+    @Bean UserDetailsService users(AppUserRepository accounts) {
+        return username -> accounts.findById(username)
+            .map(account -> User.withUsername(account.getUsername())
+                .password(account.getPasswordHash())
+                .roles(account.getRole())
+                .disabled(!account.isEnabled())
+                .build())
+            .orElseThrow(() -> new UsernameNotFoundException("Account not found"));
     }
 
     @Bean UrlBasedCorsConfigurationSource cors(@Value("${CORS_ALLOWED_ORIGIN:https://gatehouse-demo.pages.dev,https://gatehouse.synapsetechworld.com,https://gatehouse-keep.synapsetechworld.com,https://gatehouse-res.synapsetechworld.com}") String origins) {
@@ -41,7 +44,7 @@ public class SecurityConfig {
 
     @Bean SecurityFilterChain security(HttpSecurity http, UrlBasedCorsConfigurationSource corsSource) throws Exception {
         return http.cors(cors -> cors.configurationSource(corsSource)).csrf(csrf -> csrf.disable())
-            .authorizeHttpRequests(auth -> auth.requestMatchers("/api/health", "/error").permitAll()
+            .authorizeHttpRequests(auth -> auth.requestMatchers("/api/health", "/api/auth/register", "/error").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/requests").hasRole("SECURITY")
                 .requestMatchers(HttpMethod.POST, "/api/devices").hasRole("RESIDENT")
                 .requestMatchers(HttpMethod.DELETE, "/api/devices").hasRole("RESIDENT")

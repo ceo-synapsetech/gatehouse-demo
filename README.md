@@ -31,6 +31,7 @@ Set these API environment variables in Render:
 - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` from the Render Postgres **internal** connection details
 - `CORS_ALLOWED_ORIGIN` to the exact Cloudflare Pages demo origin (for example, `https://your-project.pages.dev`)
 - `DDL_AUTO=validate`
+- `SIGNUP_SECOND_APPROVER_UNIT` to the second signup approver's A-wing flat (defaults to `A-104`; `A-603` remains the other required approver)
 
 Place the API and Postgres in the same Render region and use the internal database host. For a Mumbai demo, Singapore is a nearby region if available in the Render account. Keep credentials in Render environment variables; do not commit them.
 

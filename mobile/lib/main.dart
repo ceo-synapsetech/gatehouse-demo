@@ -5,6 +5,8 @@ import 'dart:io';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'firebase_options.dart';
 
 const _apiBase = String.fromEnvironment(
@@ -15,6 +17,10 @@ const _appRoleName = String.fromEnvironment(
   'GATEHOUSE_APP_ROLE',
   defaultValue: 'resident',
 );
+final _aWingUnits = List<String>.unmodifiable([
+  for (var floor = 1; floor <= 14; floor++)
+    for (var flat = 1; flat <= 5; flat++) 'A-${floor}0$flat',
+]);
 
 const _forest = Color(0xFF1B5A46);
 const _blue = Color(0xFF1D627C);
@@ -22,12 +28,173 @@ const _paper = Color(0xFFF4F7F4);
 const _ink = Color(0xFF182824);
 const _muted = Color(0xFF71807B);
 
+const _approveActionId = 'APPROVE_VISITOR';
+const _declineActionId = 'DECLINE_VISITOR';
+const _residentNotificationChannel = AndroidNotificationChannel(
+  'resident_visitor_approvals',
+  'Visitor approvals',
+  description: 'Visitor and delivery requests waiting for your decision.',
+  importance: Importance.high,
+);
+
+final FlutterLocalNotificationsPlugin _localNotifications =
+    FlutterLocalNotificationsPlugin();
+const FlutterSecureStorage _secureStorage = FlutterSecureStorage();
+const _savedUsernameKey = 'gatehouse.username';
+const _savedPasswordKey = 'gatehouse.password';
+final GlobalKey<_GatehouseHomeState> _gatehouseHomeKey =
+    GlobalKey<_GatehouseHomeState>();
+final GlobalKey<_DashboardScreenState> _dashboardKey =
+    GlobalKey<_DashboardScreenState>();
+_PendingNotificationAction? _pendingNotificationAction;
+bool _openNotificationsAfterSignIn = false;
+
+class _PendingNotificationAction {
+  const _PendingNotificationAction({
+    required this.requestId,
+    required this.status,
+    this.notificationId,
+  });
+
+  final int requestId;
+  final int? notificationId;
+  final String status;
+}
+
+@pragma('vm:entry-point')
+Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
+  await _initializeLocalNotifications(handleLaunchDetails: false);
+  await _showVisitorNotification(message);
+}
+
+Future<void> _initializeLocalNotifications({
+  required bool handleLaunchDetails,
+}) async {
+  await _localNotifications.initialize(
+    const InitializationSettings(
+      android: AndroidInitializationSettings('ic_stat_gatehouse'),
+    ),
+    onDidReceiveNotificationResponse: _onLocalNotificationResponse,
+  );
+  await _localNotifications
+      .resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin
+      >()
+      ?.createNotificationChannel(_residentNotificationChannel);
+
+  if (!handleLaunchDetails) return;
+  final launchDetails = await _localNotifications
+      .getNotificationAppLaunchDetails();
+  final response = launchDetails?.notificationResponse;
+  if (launchDetails?.didNotificationLaunchApp == true && response != null) {
+    _onLocalNotificationResponse(response);
+  }
+}
+
+void _onLocalNotificationResponse(NotificationResponse response) {
+  if (response.payload == null) return;
+  try {
+    final payload = jsonDecode(response.payload!) as Map<String, dynamic>;
+    final requestId = int.tryParse(payload['requestId']?.toString() ?? '');
+    final notificationId =
+        int.tryParse(payload['notificationId']?.toString() ?? '');
+
+    if (response.actionId == _approveActionId ||
+        response.actionId == _declineActionId) {
+      if (requestId == null) return;
+      final action = _PendingNotificationAction(
+        requestId: requestId,
+        notificationId: notificationId,
+        status: response.actionId == _approveActionId ? 'APPROVED' : 'DENIED',
+      );
+      final home = _gatehouseHomeKey.currentState;
+      if (home == null) {
+        _pendingNotificationAction = action;
+      } else {
+        unawaited(home.handleNotificationAction(action));
+      }
+      return;
+    }
+
+    _openNotificationsAfterSignIn = true;
+    final dashboard = _dashboardKey.currentState;
+    if (dashboard != null) {
+      _openNotificationsAfterSignIn = false;
+      unawaited(dashboard.openNotificationsFromPush());
+    }
+  } on FormatException {
+    // Ignore malformed payloads from old or unrelated notifications.
+  } on TypeError {
+    // Ignore malformed payloads from old or unrelated notifications.
+  }
+}
+
+Future<void> _showVisitorNotification(RemoteMessage message) async {
+  if (!Platform.isAndroid || _buildRole != UserRole.resident) return;
+  final requestId = int.tryParse(message.data['requestId'] ?? '');
+  if (requestId == null) return;
+
+  final notificationId =
+      int.tryParse(message.data['notificationId'] ?? '') ?? requestId;
+  final title =
+      message.data['title'] ??
+      message.notification?.title ??
+      'Visitor approval needed';
+  final body =
+      message.data['body'] ??
+      message.notification?.body ??
+      'A visitor request is waiting for your decision.';
+  final payload = jsonEncode({
+    'notificationId': notificationId,
+    'requestId': requestId,
+  });
+
+  await _localNotifications.show(
+    requestId,
+    title,
+    body,
+    NotificationDetails(
+      android: AndroidNotificationDetails(
+        _residentNotificationChannel.id,
+        _residentNotificationChannel.name,
+        channelDescription: _residentNotificationChannel.description,
+        importance: Importance.high,
+        priority: Priority.high,
+        styleInformation: BigTextStyleInformation(body),
+        actions: const [
+          AndroidNotificationAction(
+            _approveActionId,
+            'Approve',
+            showsUserInterface: true,
+          ),
+          AndroidNotificationAction(
+            _declineActionId,
+            'Decline',
+            showsUserInterface: true,
+          ),
+        ],
+      ),
+    ),
+    payload: payload,
+  );
+}
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   if (_appRoleName == 'resident') {
     await Firebase.initializeApp(
       options: DefaultFirebaseOptions.currentPlatform,
     );
+    if (Platform.isAndroid) {
+      FirebaseMessaging.onBackgroundMessage(
+        _firebaseMessagingBackgroundHandler,
+      );
+      await _initializeLocalNotifications(handleLaunchDetails: true);
+    }
   }
   runApp(const GatehouseApp());
 }
@@ -87,7 +254,7 @@ class GatehouseApp extends StatelessWidget {
         ),
       ),
     ),
-    home: const GatehouseHome(),
+    home: GatehouseHome(key: _gatehouseHomeKey),
   );
 }
 
@@ -104,12 +271,13 @@ class ApiClient {
   final String username;
   final String password;
   final HttpClient _client = HttpClient()
-    ..connectionTimeout = const Duration(seconds: 15);
+    ..connectionTimeout = const Duration(seconds: 120);
 
   Future<dynamic> _request(
     String path, {
     String method = 'GET',
     Map<String, Object?>? body,
+    bool includeAuth = true,
   }) async {
     try {
       final request = await _client.openUrl(
@@ -117,9 +285,10 @@ class ApiClient {
         Uri.parse('$_apiBase$path'),
       );
       final basic = base64Encode(utf8.encode('$username:$password'));
-      request.headers
-        ..set(HttpHeaders.authorizationHeader, 'Basic $basic')
-        ..set(HttpHeaders.acceptHeader, 'application/json');
+      request.headers.set(HttpHeaders.acceptHeader, 'application/json');
+      if (includeAuth) {
+        request.headers.set(HttpHeaders.authorizationHeader, 'Basic $basic');
+      }
       if (body != null) {
         request.headers.contentType = ContentType.json;
         request.write(jsonEncode(body));
@@ -135,6 +304,10 @@ class ApiClient {
         );
       }
       return text.isEmpty ? null : jsonDecode(text);
+    } on TimeoutException {
+      throw const ApiException(
+        'The server took too long to wake up. Wait a minute, then try again.',
+      );
     } on SocketException {
       throw const ApiException(
         'Could not connect. Check your internet connection and try again.',
@@ -150,6 +323,44 @@ class ApiClient {
 
   Future<Profile> signIn() async =>
       Profile.fromJson(await _request('/api/auth/me') as Map<String, dynamic>);
+
+  Future<RegistrationResult> register({
+    required String displayName,
+    required String role,
+    String? unit,
+    String? inviteCode,
+  }) async {
+    final result = await _request(
+      '/api/auth/register',
+      method: 'POST',
+      includeAuth: false,
+      body: {
+        'username': username,
+        'password': password,
+        'displayName': displayName,
+        'role': role,
+        if (unit != null) 'unit': unit,
+        if (inviteCode != null) 'inviteCode': inviteCode,
+      },
+    );
+    return RegistrationResult.fromJson(result as Map<String, dynamic>);
+  }
+
+  Future<List<PendingSignup>> pendingSignups() async {
+    final result = await _request('/api/admin/signups/pending') as List<dynamic>;
+    return result
+        .map((item) => PendingSignup.fromJson(item as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<SignupDecision> reviewSignup(String username, String decision) async {
+    final result = await _request(
+      '/api/admin/signups/decision',
+      method: 'POST',
+      body: {'username': username, 'decision': decision},
+    ) as Map<String, dynamic>;
+    return SignupDecision.fromJson(result);
+  }
 
   Future<List<AccessRequest>> requests() async {
     final result = await _request('/api/requests') as List<dynamic>;
@@ -210,16 +421,82 @@ class ApiClient {
 }
 
 class Profile {
-  const Profile({required this.username, required this.role, this.unit});
+  const Profile({
+    required this.username,
+    required this.role,
+    this.unit,
+    this.name,
+    this.canApproveSignups = false,
+    this.secondApproverUnit = 'A-104',
+  });
   final String username;
   final UserRole role;
   final String? unit;
+  final String? name;
+  final bool canApproveSignups;
+  final String secondApproverUnit;
 
   factory Profile.fromJson(Map<String, dynamic> json) => Profile(
     username: json['username'] as String? ?? '',
     role: json['role'] == 'RESIDENT' ? UserRole.resident : UserRole.security,
     unit: json['unit'] as String?,
+    name: json['name'] as String?,
+    canApproveSignups: json['canApproveSignups'] == 'true',
+    secondApproverUnit: json['signupSecondApproverUnit'] as String? ?? 'A-104',
   );
+}
+
+class RegistrationResult {
+  const RegistrationResult({
+    required this.status,
+    required this.firstApproverUnit,
+    required this.secondApproverUnit,
+  });
+  final String status;
+  final String firstApproverUnit;
+  final String secondApproverUnit;
+
+  factory RegistrationResult.fromJson(Map<String, dynamic> json) =>
+      RegistrationResult(
+        status: json['status'] as String? ?? 'PENDING',
+        firstApproverUnit: json['firstApproverUnit'] as String? ?? 'A-603',
+        secondApproverUnit: json['secondApproverUnit'] as String? ?? 'A-104',
+      );
+}
+
+class PendingSignup {
+  const PendingSignup({
+    required this.username,
+    required this.displayName,
+    required this.role,
+    this.unit,
+    required this.approvedBy603,
+    required this.approvedBySecond,
+  });
+
+  final String username;
+  final String displayName;
+  final String role;
+  final String? unit;
+  final bool approvedBy603;
+  final bool approvedBySecond;
+
+  factory PendingSignup.fromJson(Map<String, dynamic> json) => PendingSignup(
+    username: json['username'] as String? ?? '',
+    displayName: json['displayName'] as String? ?? '',
+    role: json['role'] as String? ?? '',
+    unit: json['unit'] as String?,
+    approvedBy603: json['approvedBy603'] as bool? ?? false,
+    approvedBySecond: json['approvedBySecond'] as bool? ?? false,
+  );
+}
+
+class SignupDecision {
+  const SignupDecision({required this.status});
+  final String status;
+
+  factory SignupDecision.fromJson(Map<String, dynamic> json) =>
+      SignupDecision(status: json['status'] as String? ?? 'PENDING');
 }
 
 class AccessRequest {
@@ -292,10 +569,12 @@ class GatehouseHome extends StatefulWidget {
 class _GatehouseHomeState extends State<GatehouseHome> {
   ApiClient? _api;
   Profile? _profile;
+  int _sessionGeneration = 0;
 
   @override
   void initState() {
     super.initState();
+    unawaited(_restoreSession());
     if (_buildRole == UserRole.resident) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         unawaited(_requestNotificationPermission());
@@ -315,11 +594,81 @@ class _GatehouseHomeState extends State<GatehouseHome> {
     }
   }
 
+  Future<void> _restoreSession() async {
+    final generation = _sessionGeneration;
+    String? username;
+    String? password;
+    try {
+      username = await _secureStorage.read(key: _savedUsernameKey);
+      password = await _secureStorage.read(key: _savedPasswordKey);
+    } catch (_) {
+      return;
+    }
+    if (generation != _sessionGeneration) return;
+    if (username == null || password == null) return;
+
+    final api = ApiClient(username: username, password: password);
+    try {
+      final profile = await api.signIn();
+      if (generation != _sessionGeneration) {
+        api.close();
+        return;
+      }
+      if (profile.role != _buildRole) {
+        await _clearSavedSession();
+        api.close();
+        return;
+      }
+      if (!mounted) {
+        api.close();
+        return;
+      }
+      setState(() {
+        _api = api;
+        _profile = profile;
+      });
+      _afterSignIn(api, profile);
+    } on ApiException catch (error) {
+      api.close();
+      if (generation == _sessionGeneration &&
+          error.message == 'Those credentials were not accepted.') {
+        await _clearSavedSession();
+      }
+    } catch (_) {
+      api.close();
+    }
+  }
+
+  Future<void> _saveSession(String username, String password) async {
+    await _secureStorage.write(key: _savedUsernameKey, value: username);
+    await _secureStorage.write(key: _savedPasswordKey, value: password);
+  }
+
+  Future<void> _clearSavedSession() async {
+    await _secureStorage.delete(key: _savedUsernameKey);
+    await _secureStorage.delete(key: _savedPasswordKey);
+  }
+
+  void _afterSignIn(ApiClient api, Profile profile) {
+    if (profile.role != UserRole.resident) return;
+    final pendingAction = _pendingNotificationAction;
+    if (pendingAction != null) {
+      _pendingNotificationAction = null;
+      unawaited(_applyNotificationAction(api, pendingAction));
+    } else if (_openNotificationsAfterSignIn) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _openNotificationsAfterSignIn = false;
+        _dashboardKey.currentState?.openNotificationsFromPush();
+      });
+    }
+  }
+
   Future<void> _signIn(
     String username,
     String password,
     UserRole selectedRole,
   ) async {
+    _sessionGeneration++;
     final api = ApiClient(username: username.trim(), password: password);
     try {
       final profile = await api.signIn();
@@ -333,10 +682,16 @@ class _GatehouseHomeState extends State<GatehouseHome> {
         api.close();
         return;
       }
+      try {
+        await _saveSession(username.trim(), password);
+      } catch (_) {
+        // Keep this sign-in usable if secure storage is temporarily unavailable.
+      }
       setState(() {
         _api = api;
         _profile = profile;
       });
+      _afterSignIn(api, profile);
     } on ApiException {
       api.close();
       rethrow;
@@ -346,12 +701,84 @@ class _GatehouseHomeState extends State<GatehouseHome> {
     }
   }
 
-  void _signOut() {
+  Future<RegistrationResult> _register(
+    String displayName,
+    String username,
+    String password,
+    String? unit,
+    String inviteCode,
+  ) async {
+    final api = ApiClient(username: username, password: password);
+    try {
+      return await api.register(
+        displayName: displayName,
+        role: _buildRole == UserRole.resident ? 'RESIDENT' : 'SECURITY',
+        unit: unit,
+        inviteCode: inviteCode.isEmpty ? null : inviteCode,
+      );
+    } finally {
+      api.close();
+    }
+  }
+
+  Future<void> handleNotificationAction(
+    _PendingNotificationAction action,
+  ) async {
+    final api = _api;
+    if (api == null || _profile?.role != UserRole.resident) {
+      _pendingNotificationAction = action;
+      return;
+    }
+    await _applyNotificationAction(api, action);
+  }
+
+  Future<void> _applyNotificationAction(
+    ApiClient api,
+    _PendingNotificationAction action,
+  ) async {
+    try {
+      await api.decide(action.requestId, action.status);
+      final notificationId = action.notificationId;
+      if (notificationId != null) {
+        await api.markNotificationRead(notificationId);
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              action.status == 'APPROVED'
+                  ? 'Visitor approved.'
+                  : 'Visitor declined.',
+            ),
+          ),
+        );
+      }
+    } on ApiException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(error.message)),
+        );
+      }
+    }
+  }
+
+  Future<void> _signOut() async {
     _api?.close();
     setState(() {
       _api = null;
       _profile = null;
     });
+    try {
+      await _clearSavedSession();
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Could not clear the saved sign-in from this device.'),
+          ),
+        );
+      }
+    }
   }
 
   @override
@@ -359,16 +786,37 @@ class _GatehouseHomeState extends State<GatehouseHome> {
     final api = _api;
     final profile = _profile;
     if (api != null && profile != null) {
-      return DashboardScreen(api: api, profile: profile, onSignOut: _signOut);
+      return DashboardScreen(
+        key: _dashboardKey,
+        api: api,
+        profile: profile,
+        onSignOut: () => unawaited(_signOut()),
+      );
     }
-    return SignInScreen(role: _buildRole, onSignIn: _signIn);
+    return SignInScreen(
+      role: _buildRole,
+      onSignIn: _signIn,
+      onRegister: _register,
+    );
   }
 }
 
 class SignInScreen extends StatefulWidget {
-  const SignInScreen({required this.role, required this.onSignIn, super.key});
+  const SignInScreen({
+    required this.role,
+    required this.onSignIn,
+    required this.onRegister,
+    super.key,
+  });
   final UserRole role;
   final Future<void> Function(String, String, UserRole) onSignIn;
+  final Future<RegistrationResult> Function(
+    String,
+    String,
+    String,
+    String?,
+    String,
+  ) onRegister;
   @override
   State<SignInScreen> createState() => _SignInScreenState();
 }
@@ -454,6 +902,13 @@ class _SignInScreenState extends State<SignInScreen> {
                             role.description,
                             style: const TextStyle(color: _muted),
                           ),
+                          if (_pendingNotificationAction != null) ...[
+                            const SizedBox(height: 10),
+                            const Text(
+                              'Sign in to apply your notification decision.',
+                              style: TextStyle(color: _blue),
+                            ),
+                          ],
                           const SizedBox(height: 20),
                           const SizedBox(height: 20),
                           Form(
@@ -534,6 +989,20 @@ class _SignInScreenState extends State<SignInScreen> {
                                 : const Icon(Icons.arrow_forward_rounded),
                             label: Text(_loading ? 'Signing in…' : 'Continue'),
                           ),
+                          const SizedBox(height: 4),
+                          TextButton(
+                            onPressed: _loading
+                                ? null
+                                : () => Navigator.of(context).push<void>(
+                                    MaterialPageRoute<void>(
+                                      builder: (_) => SignUpScreen(
+                                        role: role,
+                                        onRegister: widget.onRegister,
+                                      ),
+                                    ),
+                                  ),
+                            child: const Text('New to Gatehouse? Create account'),
+                          ),
                         ],
                       ),
                     ),
@@ -545,6 +1014,247 @@ class _SignInScreenState extends State<SignInScreen> {
                     style: TextStyle(color: _muted, fontSize: 11),
                   ),
                 ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class SignUpScreen extends StatefulWidget {
+  const SignUpScreen({required this.role, required this.onRegister, super.key});
+
+  final UserRole role;
+  final Future<RegistrationResult> Function(
+    String,
+    String,
+    String,
+    String?,
+    String,
+  ) onRegister;
+
+  @override
+  State<SignUpScreen> createState() => _SignUpScreenState();
+}
+
+class _SignUpScreenState extends State<SignUpScreen> {
+  final _formKey = GlobalKey<FormState>();
+  final _name = TextEditingController();
+  final _username = TextEditingController();
+  final _password = TextEditingController();
+  final _confirmPassword = TextEditingController();
+  final _inviteCode = TextEditingController();
+  String _unit = 'A-204';
+  bool _loading = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _username.dispose();
+    _password.dispose();
+    _confirmPassword.dispose();
+    _inviteCode.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    final username = widget.role == UserRole.resident
+        ? _username.text.trim().toLowerCase()
+        : _username.text.trim();
+    try {
+      final registration = await widget.onRegister(
+        _name.text.trim(),
+        username,
+        _password.text,
+        widget.role == UserRole.resident ? _unit : null,
+        _inviteCode.text.trim(),
+      );
+      if (mounted) {
+        final messenger = ScaffoldMessenger.of(context);
+        Navigator.of(context).pop();
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(
+              registration.status == 'PENDING'
+                  ? 'Signup submitted. ${registration.firstApproverUnit} and ${registration.secondApproverUnit} must approve it before you can sign in.'
+                  : 'Account created.',
+            ),
+          ),
+        );
+      }
+    } on ApiException catch (error) {
+      if (mounted) setState(() => _error = error.message);
+    } catch (_) {
+      if (mounted) {
+        setState(() => _error = 'Could not create the account. Please try again.');
+      }
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final resident = widget.role == UserRole.resident;
+    final accent = widget.role.color;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Create account')),
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(22),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 440),
+              child: Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Form(
+                    key: _formKey,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(
+                          'Create ${resident ? 'resident' : 'security'} account',
+                          style: Theme.of(context)
+                              .textTheme
+                              .headlineSmall
+                              ?.copyWith(fontWeight: FontWeight.w800),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          resident
+                              ? 'Use your email and home unit.'
+                              : 'Enter your guard ID and administrator invite code.',
+                          style: const TextStyle(color: _muted),
+                        ),
+                        const SizedBox(height: 20),
+                        TextFormField(
+                          controller: _name,
+                          textCapitalization: TextCapitalization.words,
+                          decoration: const InputDecoration(
+                            labelText: 'Full name',
+                            prefixIcon: Icon(Icons.badge_outlined),
+                          ),
+                          validator: (value) => value == null || value.trim().length < 2
+                              ? 'Enter your full name.'
+                              : null,
+                        ),
+                        const SizedBox(height: 14),
+                        TextFormField(
+                          controller: _username,
+                          autocorrect: false,
+                          keyboardType: resident
+                              ? TextInputType.emailAddress
+                              : TextInputType.text,
+                          decoration: InputDecoration(
+                            labelText: resident ? 'Email address' : 'Guard ID',
+                            prefixIcon: const Icon(Icons.person_outline),
+                          ),
+                          validator: (value) => value == null || value.trim().length < 3
+                              ? resident
+                                  ? 'Enter your email address.'
+                                  : 'Enter your guard ID.'
+                              : null,
+                        ),
+                        if (resident) ...[
+                          const SizedBox(height: 14),
+                          DropdownButtonFormField<String>(
+                            initialValue: _unit,
+                            decoration: const InputDecoration(
+                              labelText: 'Home unit',
+                              prefixIcon: Icon(Icons.home_outlined),
+                            ),
+                            items: _aWingUnits
+                                .map(
+                                  (unit) => DropdownMenuItem(
+                                    value: unit,
+                                    child: Text(unit),
+                                  ),
+                                )
+                                .toList(),
+                            onChanged: (value) {
+                              if (value != null) setState(() => _unit = value);
+                            },
+                          ),
+                        ] else ...[
+                          const SizedBox(height: 14),
+                          TextFormField(
+                            controller: _inviteCode,
+                            autocorrect: false,
+                            obscureText: true,
+                            decoration: const InputDecoration(
+                              labelText: 'Administrator invite code',
+                              prefixIcon: Icon(Icons.key_outlined),
+                            ),
+                            validator: (value) => value == null || value.isEmpty
+                                ? 'Enter your security invite code.'
+                                : null,
+                          ),
+                        ],
+                        const SizedBox(height: 14),
+                        TextFormField(
+                          controller: _password,
+                          obscureText: true,
+                          decoration: const InputDecoration(
+                            labelText: 'Password',
+                            prefixIcon: Icon(Icons.lock_outline),
+                          ),
+                          validator: (value) => value == null || value.length < 8
+                              ? 'Use at least 8 characters.'
+                              : null,
+                        ),
+                        const SizedBox(height: 14),
+                        TextFormField(
+                          controller: _confirmPassword,
+                          obscureText: true,
+                          textInputAction: TextInputAction.done,
+                          onFieldSubmitted: (_) => _submit(),
+                          decoration: const InputDecoration(
+                            labelText: 'Confirm password',
+                            prefixIcon: Icon(Icons.lock_outline),
+                          ),
+                          validator: (value) => value != _password.text
+                              ? 'Passwords do not match.'
+                              : null,
+                        ),
+                        if (_error != null) ...[
+                          const SizedBox(height: 14),
+                          Text(
+                            _error!,
+                            style: const TextStyle(color: Color(0xFF9D483C)),
+                          ),
+                        ],
+                        const SizedBox(height: 20),
+                        FilledButton.icon(
+                          onPressed: _loading ? null : _submit,
+                          style: FilledButton.styleFrom(
+                            backgroundColor: accent,
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                          ),
+                          icon: _loading
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : const Icon(Icons.person_add_alt_1_rounded),
+                          label: Text(_loading ? 'Creating account…' : 'Create account'),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
               ),
             ),
           ),
@@ -612,6 +1322,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     super.dispose();
   }
 
+  Future<void> openNotificationsFromPush() => _openNotifications();
+
   Future<void> _setupPushNotifications() async {
     try {
       final messaging = FirebaseMessaging.instance;
@@ -626,12 +1338,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _deviceToken = token;
         widget.api.registerDevice(token).catchError((_) {});
       });
-      _foregroundMessageSubscription = FirebaseMessaging.onMessage.listen((message) {
+      _foregroundMessageSubscription = FirebaseMessaging.onMessage.listen((
+        message,
+      ) {
         _loadNotifications(silent: true);
-        final title = message.notification?.title;
-        if (title != null && mounted) _notice(title);
+        _showVisitorNotification(message).catchError((_) {});
       });
-      _messageOpenSubscription = FirebaseMessaging.onMessageOpenedApp.listen((_) {
+      _messageOpenSubscription = FirebaseMessaging.onMessageOpenedApp.listen((
+        _,
+      ) {
         if (mounted) _openNotifications();
       });
       final initialMessage = await messaging.getInitialMessage();
@@ -860,9 +1575,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
+  Future<void> _openSignupApprovals() => Navigator.of(context).push<void>(
+    MaterialPageRoute<void>(
+      builder: (_) => SignupApprovalsScreen(
+        api: widget.api,
+        profile: widget.profile,
+      ),
+    ),
+  );
+
   @override
   Widget build(BuildContext context) {
-    final userName = widget.profile.username.split('@').first;
+    final userName = widget.profile.name ?? widget.profile.username.split('@').first;
     final name = userName.isEmpty
         ? 'Resident'
         : '${userName[0].toUpperCase()}${userName.substring(1)}';
@@ -909,10 +1633,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
             onSelected: (value) {
               if (value == 'profile') _showProfile();
               if (value == 'settings') _showSettings();
+              if (value == 'signups') _openSignupApprovals();
               if (value == 'logout') _signOut();
             },
-            itemBuilder: (context) => const [
-              PopupMenuItem(
+            itemBuilder: (context) => [
+              if (widget.profile.canApproveSignups)
+                const PopupMenuItem(
+                  value: 'signups',
+                  child: ListTile(
+                    leading: Icon(Icons.admin_panel_settings_outlined),
+                    title: Text('Signup approvals'),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+              const PopupMenuItem(
                 value: 'profile',
                 child: ListTile(
                   leading: Icon(Icons.person_outline),
@@ -920,7 +1654,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   contentPadding: EdgeInsets.zero,
                 ),
               ),
-              PopupMenuItem(
+              const PopupMenuItem(
                 value: 'settings',
                 child: ListTile(
                   leading: Icon(Icons.tune_rounded),
@@ -928,7 +1662,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   contentPadding: EdgeInsets.zero,
                 ),
               ),
-              PopupMenuItem(
+              const PopupMenuItem(
                 value: 'logout',
                 child: ListTile(
                   leading: Icon(Icons.logout_rounded),
@@ -1285,6 +2019,207 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 }
 
+class SignupApprovalsScreen extends StatefulWidget {
+  const SignupApprovalsScreen({
+    required this.api,
+    required this.profile,
+    super.key,
+  });
+
+  final ApiClient api;
+  final Profile profile;
+
+  @override
+  State<SignupApprovalsScreen> createState() => _SignupApprovalsScreenState();
+}
+
+class _SignupApprovalsScreenState extends State<SignupApprovalsScreen> {
+  List<PendingSignup> _signups = [];
+  bool _loading = true;
+  String? _error;
+  String? _workingUsername;
+
+  String get _approverUnit => widget.profile.unit ?? '';
+
+  bool _approvedByMe(PendingSignup signup) => _approverUnit == 'A-603'
+      ? signup.approvedBy603
+      : signup.approvedBySecond;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSignups();
+  }
+
+  Future<void> _loadSignups() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final signups = await widget.api.pendingSignups();
+      if (mounted) setState(() => _signups = signups);
+    } on ApiException catch (error) {
+      if (mounted) setState(() => _error = error.message);
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _review(PendingSignup signup, String decision) async {
+    setState(() => _workingUsername = signup.username);
+    try {
+      final result = await widget.api.reviewSignup(signup.username, decision);
+      await _loadSignups();
+      if (mounted) {
+        final message = decision == 'REJECT'
+            ? 'Signup rejected.'
+            : result.status == 'ACTIVE'
+            ? 'Both approvals are complete. The account is active.'
+            : 'Approval recorded. Waiting for the other approver.';
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(message)),
+        );
+      }
+    } on ApiException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(error.message)),
+        );
+      }
+      await _loadSignups();
+    } finally {
+      if (mounted) setState(() => _workingUsername = null);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(
+      title: const Text('Signup approvals'),
+      actions: [
+        IconButton(
+          tooltip: 'Refresh',
+          onPressed: _loadSignups,
+          icon: const Icon(Icons.refresh_rounded),
+        ),
+      ],
+    ),
+    body: _loading && _signups.isEmpty
+        ? const Center(child: CircularProgressIndicator())
+        : _error != null && _signups.isEmpty
+        ? Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(_error!, textAlign: TextAlign.center),
+                  const SizedBox(height: 12),
+                  FilledButton(
+                    onPressed: _loadSignups,
+                    child: const Text('Try again'),
+                  ),
+                ],
+              ),
+            ),
+          )
+        : _signups.isEmpty
+        ? const Center(child: Text('No signups are waiting for approval.'))
+        : RefreshIndicator(
+            onRefresh: _loadSignups,
+            child: ListView.builder(
+              padding: const EdgeInsets.all(16),
+              itemCount: _signups.length,
+              itemBuilder: (context, index) {
+                final signup = _signups[index];
+                final approvedByMe = _approvedByMe(signup);
+                final isWorking = _workingUsername == signup.username;
+                return Card(
+                  margin: const EdgeInsets.only(bottom: 12),
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          signup.displayName,
+                          style: const TextStyle(
+                            fontSize: 17,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(signup.username),
+                        Text(
+                          '${signup.role == 'RESIDENT' ? 'Resident' : 'Security'}${signup.unit == null ? '' : ' · ${signup.unit}'}',
+                          style: const TextStyle(color: _muted),
+                        ),
+                        const SizedBox(height: 12),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            _approvalStatus('A-603', signup.approvedBy603),
+                            _approvalStatus(
+                              widget.profile.secondApproverUnit,
+                              signup.approvedBySecond,
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                onPressed: isWorking
+                                    ? null
+                                    : () => _review(signup, 'REJECT'),
+                                icon: const Icon(Icons.close_rounded),
+                                label: const Text('Reject'),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: FilledButton.icon(
+                                onPressed: isWorking || approvedByMe
+                                    ? null
+                                    : () => _review(signup, 'APPROVE'),
+                                icon: isWorking
+                                    ? const SizedBox(
+                                        width: 16,
+                                        height: 16,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                        ),
+                                      )
+                                    : const Icon(Icons.check_rounded),
+                                label: Text(
+                                  approvedByMe ? 'Approved by you' : 'Approve',
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+  );
+
+  Widget _approvalStatus(String unit, bool approved) => Chip(
+    avatar: Icon(
+      approved ? Icons.check_circle : Icons.schedule,
+      size: 18,
+      color: approved ? _forest : _muted,
+    ),
+    label: Text('$unit ${approved ? 'approved' : 'pending'}'),
+  );
+}
+
 class _NewRequestData {
   const _NewRequestData(this.unit, this.kind, this.person, this.details);
   final String unit;
@@ -1341,20 +2276,14 @@ class _NewRequestDialogState extends State<_NewRequestDialog> {
             DropdownButtonFormField<String>(
               initialValue: _unit,
               decoration: const InputDecoration(labelText: 'Resident / unit'),
-              items: const [
-                DropdownMenuItem(
-                  value: 'A-204',
-                  child: Text('Block A · Unit 204'),
-                ),
-                DropdownMenuItem(
-                  value: 'B-101',
-                  child: Text('Block B · Unit 101'),
-                ),
-                DropdownMenuItem(
-                  value: 'C-302',
-                  child: Text('Block C · Unit 302'),
-                ),
-              ],
+              items: _aWingUnits
+                  .map(
+                    (unit) => DropdownMenuItem(
+                      value: unit,
+                      child: Text('A-wing · Flat ${unit.substring(2)}'),
+                    ),
+                  )
+                  .toList(),
               onChanged: (value) => setState(() => _unit = value ?? _unit),
             ),
             const SizedBox(height: 12),

@@ -3,9 +3,9 @@ package com.gatehouse.demo;
 import com.google.auth.oauth2.GoogleCredentials;
 import com.google.firebase.FirebaseApp;
 import com.google.firebase.FirebaseOptions;
+import com.google.firebase.messaging.AndroidConfig;
 import com.google.firebase.messaging.FirebaseMessaging;
 import com.google.firebase.messaging.Message;
-import com.google.firebase.messaging.Notification;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -44,12 +44,13 @@ public class FcmPushService {
         for (DeviceRegistration device : devices) {
             Message message = Message.builder()
                 .setToken(device.getToken())
-                .setNotification(Notification.builder()
-                    .setTitle(notification.getTitle())
-                    .setBody(notification.getMessage())
+                .setAndroidConfig(AndroidConfig.builder()
+                    .setPriority(AndroidConfig.Priority.HIGH)
                     .build())
                 .putData("notificationId", notification.getId().toString())
                 .putData("requestId", notification.getRequestId().toString())
+                .putData("title", notification.getTitle())
+                .putData("body", notification.getMessage())
                 .build();
             try {
                 FirebaseMessaging.getInstance(firebaseApp).sendAsync(message).get();

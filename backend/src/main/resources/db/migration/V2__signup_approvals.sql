@@ -1,0 +1,3 @@
+ALTER TABLE app_users ADD COLUMN IF NOT EXISTS approval_status VARCHAR(16);
+ALTER TABLE app_users ADD COLUMN IF NOT EXISTS approved_by_603 BOOLEAN;
+ALTER TABLE app_users ADD COLUMN IF NOT EXISTS approved_by_second BOOLEAN;

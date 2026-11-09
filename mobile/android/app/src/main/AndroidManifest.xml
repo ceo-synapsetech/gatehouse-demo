@@ -3,7 +3,8 @@
     <application
         android:label="${appLabel}"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@drawable/ic_gatehouse_logo"
+        android:allowBackup="false">
         <activity
             android:name=".MainActivity"
             android:exported="true"
