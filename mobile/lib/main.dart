@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'firebase_options.dart';
 
 const _apiBase = String.fromEnvironment(
@@ -22,12 +23,170 @@ const _paper = Color(0xFFF4F7F4);
 const _ink = Color(0xFF182824);
 const _muted = Color(0xFF71807B);
 
+const _approveActionId = 'APPROVE_VISITOR';
+const _declineActionId = 'DECLINE_VISITOR';
+const _residentNotificationChannel = AndroidNotificationChannel(
+  'resident_visitor_approvals',
+  'Visitor approvals',
+  description: 'Visitor and delivery requests waiting for your decision.',
+  importance: Importance.high,
+);
+
+final FlutterLocalNotificationsPlugin _localNotifications =
+    FlutterLocalNotificationsPlugin();
+final GlobalKey<_GatehouseHomeState> _gatehouseHomeKey =
+    GlobalKey<_GatehouseHomeState>();
+final GlobalKey<_DashboardScreenState> _dashboardKey =
+    GlobalKey<_DashboardScreenState>();
+_PendingNotificationAction? _pendingNotificationAction;
+bool _openNotificationsAfterSignIn = false;
+
+class _PendingNotificationAction {
+  const _PendingNotificationAction({
+    required this.requestId,
+    required this.status,
+    this.notificationId,
+  });
+
+  final int requestId;
+  final int? notificationId;
+  final String status;
+}
+
+@pragma('vm:entry-point')
+Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
+  await _initializeLocalNotifications(handleLaunchDetails: false);
+  await _showVisitorNotification(message);
+}
+
+Future<void> _initializeLocalNotifications({
+  required bool handleLaunchDetails,
+}) async {
+  await _localNotifications.initialize(
+    settings: const InitializationSettings(
+      android: AndroidInitializationSettings('ic_stat_gatehouse'),
+    ),
+    onDidReceiveNotificationResponse: _onLocalNotificationResponse,
+  );
+  await _localNotifications
+      .resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin
+      >()
+      ?.createNotificationChannel(_residentNotificationChannel);
+
+  if (!handleLaunchDetails) return;
+  final launchDetails = await _localNotifications
+      .getNotificationAppLaunchDetails();
+  final response = launchDetails?.notificationResponse;
+  if (launchDetails?.didNotificationLaunchApp == true && response != null) {
+    _onLocalNotificationResponse(response);
+  }
+}
+
+void _onLocalNotificationResponse(NotificationResponse response) {
+  if (response.payload == null) return;
+  try {
+    final payload = jsonDecode(response.payload!) as Map<String, dynamic>;
+    final requestId = int.tryParse(payload['requestId']?.toString() ?? '');
+    final notificationId =
+        int.tryParse(payload['notificationId']?.toString() ?? '');
+
+    if (response.actionId == _approveActionId ||
+        response.actionId == _declineActionId) {
+      if (requestId == null) return;
+      final action = _PendingNotificationAction(
+        requestId: requestId,
+        notificationId: notificationId,
+        status: response.actionId == _approveActionId ? 'APPROVED' : 'DENIED',
+      );
+      final home = _gatehouseHomeKey.currentState;
+      if (home == null) {
+        _pendingNotificationAction = action;
+      } else {
+        unawaited(home.handleNotificationAction(action));
+      }
+      return;
+    }
+
+    _openNotificationsAfterSignIn = true;
+    final dashboard = _dashboardKey.currentState;
+    if (dashboard != null) {
+      _openNotificationsAfterSignIn = false;
+      unawaited(dashboard.openNotificationsFromPush());
+    }
+  } on FormatException {
+    // Ignore malformed payloads from old or unrelated notifications.
+  } on TypeError {
+    // Ignore malformed payloads from old or unrelated notifications.
+  }
+}
+
+Future<void> _showVisitorNotification(RemoteMessage message) async {
+  if (!Platform.isAndroid || _buildRole != UserRole.resident) return;
+  final requestId = int.tryParse(message.data['requestId'] ?? '');
+  if (requestId == null) return;
+
+  final notificationId =
+      int.tryParse(message.data['notificationId'] ?? '') ?? requestId;
+  final title =
+      message.data['title'] ??
+      message.notification?.title ??
+      'Visitor approval needed';
+  final body =
+      message.data['body'] ??
+      message.notification?.body ??
+      'A visitor request is waiting for your decision.';
+  final payload = jsonEncode({
+    'notificationId': notificationId,
+    'requestId': requestId,
+  });
+
+  await _localNotifications.show(
+    requestId,
+    title,
+    body,
+    NotificationDetails(
+      android: AndroidNotificationDetails(
+        _residentNotificationChannel.id,
+        _residentNotificationChannel.name,
+        channelDescription: _residentNotificationChannel.description,
+        importance: Importance.high,
+        priority: Priority.high,
+        styleInformation: BigTextStyleInformation(body),
+        actions: const [
+          AndroidNotificationAction(
+            _approveActionId,
+            'Approve',
+            showsUserInterface: true,
+          ),
+          AndroidNotificationAction(
+            _declineActionId,
+            'Decline',
+            showsUserInterface: true,
+          ),
+        ],
+      ),
+    ),
+    payload: payload,
+  );
+}
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   if (_appRoleName == 'resident') {
     await Firebase.initializeApp(
       options: DefaultFirebaseOptions.currentPlatform,
     );
+    if (Platform.isAndroid) {
+      FirebaseMessaging.onBackgroundMessage(
+        _firebaseMessagingBackgroundHandler,
+      );
+      await _initializeLocalNotifications(handleLaunchDetails: true);
+    }
   }
   runApp(const GatehouseApp());
 }
@@ -87,7 +246,7 @@ class GatehouseApp extends StatelessWidget {
         ),
       ),
     ),
-    home: const GatehouseHome(),
+    home: GatehouseHome(key: _gatehouseHomeKey),
   );
 }
 
@@ -341,12 +500,65 @@ class _GatehouseHomeState extends State<GatehouseHome> {
         _api = api;
         _profile = profile;
       });
+      if (profile.role == UserRole.resident) {
+        final pendingAction = _pendingNotificationAction;
+        if (pendingAction != null) {
+          _pendingNotificationAction = null;
+          unawaited(_applyNotificationAction(api, pendingAction));
+        } else if (_openNotificationsAfterSignIn) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            _openNotificationsAfterSignIn = false;
+            _dashboardKey.currentState?.openNotificationsFromPush();
+          });
+        }
+      }
     } on ApiException {
       api.close();
       rethrow;
     } catch (_) {
       api.close();
       throw const ApiException('Sign-in failed. Please try again.');
+    }
+  }
+
+  Future<void> handleNotificationAction(
+    _PendingNotificationAction action,
+  ) async {
+    final api = _api;
+    if (api == null || _profile?.role != UserRole.resident) {
+      _pendingNotificationAction = action;
+      return;
+    }
+    await _applyNotificationAction(api, action);
+  }
+
+  Future<void> _applyNotificationAction(
+    ApiClient api,
+    _PendingNotificationAction action,
+  ) async {
+    try {
+      await api.decide(action.requestId, action.status);
+      final notificationId = action.notificationId;
+      if (notificationId != null) {
+        await api.markNotificationRead(notificationId);
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              action.status == 'APPROVED'
+                  ? 'Visitor approved.'
+                  : 'Visitor declined.',
+            ),
+          ),
+        );
+      }
+    } on ApiException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(error.message)),
+        );
+      }
     }
   }
 
@@ -363,7 +575,12 @@ class _GatehouseHomeState extends State<GatehouseHome> {
     final api = _api;
     final profile = _profile;
     if (api != null && profile != null) {
-      return DashboardScreen(api: api, profile: profile, onSignOut: _signOut);
+      return DashboardScreen(
+        key: _dashboardKey,
+        api: api,
+        profile: profile,
+        onSignOut: _signOut,
+      );
     }
     return SignInScreen(role: _buildRole, onSignIn: _signIn);
   }
@@ -458,6 +675,13 @@ class _SignInScreenState extends State<SignInScreen> {
                             role.description,
                             style: const TextStyle(color: _muted),
                           ),
+                          if (_pendingNotificationAction != null) ...[
+                            const SizedBox(height: 10),
+                            const Text(
+                              'Sign in to apply your notification decision.',
+                              style: TextStyle(color: _blue),
+                            ),
+                          ],
                           const SizedBox(height: 20),
                           const SizedBox(height: 20),
                           Form(
@@ -616,6 +840,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     super.dispose();
   }
 
+  Future<void> openNotificationsFromPush() => _openNotifications();
+
   Future<void> _setupPushNotifications() async {
     try {
       final messaging = FirebaseMessaging.instance;
@@ -630,12 +856,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _deviceToken = token;
         widget.api.registerDevice(token).catchError((_) {});
       });
-      _foregroundMessageSubscription = FirebaseMessaging.onMessage.listen((message) {
+      _foregroundMessageSubscription = FirebaseMessaging.onMessage.listen((
+        message,
+      ) {
         _loadNotifications(silent: true);
-        final title = message.notification?.title;
-        if (title != null && mounted) _notice(title);
+        _showVisitorNotification(message).catchError((_) {});
       });
-      _messageOpenSubscription = FirebaseMessaging.onMessageOpenedApp.listen((_) {
+      _messageOpenSubscription = FirebaseMessaging.onMessageOpenedApp.listen((
+        _,
+      ) {
         if (mounted) _openNotifications();
       });
       final initialMessage = await messaging.getInitialMessage();
