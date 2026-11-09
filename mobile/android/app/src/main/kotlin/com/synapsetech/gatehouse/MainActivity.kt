@@ -10,7 +10,7 @@ class MainActivity : FlutterActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if (
-            BuildConfig.FLAVOR == "resident" &&
+            !packageName.endsWith(".security") &&
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
         ) {
             val channel = NotificationChannel(
