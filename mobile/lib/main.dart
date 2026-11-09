@@ -50,6 +50,7 @@ final GlobalKey<_DashboardScreenState> _dashboardKey =
     GlobalKey<_DashboardScreenState>();
 _PendingNotificationAction? _pendingNotificationAction;
 bool _openNotificationsAfterSignIn = false;
+int? _pendingApprovalRequestId;
 Future<void> _residentServicesReady = Future<void>.value();
 
 class _PendingNotificationAction {
@@ -119,6 +120,16 @@ void _onLocalNotificationResponse(NotificationResponse response) {
         _pendingNotificationAction = action;
       } else {
         unawaited(home.handleNotificationAction(action));
+      }
+      return;
+    }
+
+    if (requestId != null) {
+      final dashboard = _dashboardKey.currentState;
+      if (dashboard == null) {
+        _pendingApprovalRequestId = requestId;
+      } else {
+        unawaited(dashboard.openApprovalDialogFromPush(requestId));
       }
       return;
     }
@@ -677,6 +688,13 @@ class _GatehouseHomeState extends State<GatehouseHome> {
     if (pendingAction != null) {
       _pendingNotificationAction = null;
       unawaited(_applyNotificationAction(api, pendingAction));
+    } else if (_pendingApprovalRequestId != null) {
+      final requestId = _pendingApprovalRequestId!;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_pendingApprovalRequestId != requestId) return;
+        _pendingApprovalRequestId = null;
+        _dashboardKey.currentState?.openApprovalDialogFromPush(requestId);
+      });
     } else if (_openNotificationsAfterSignIn) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _openNotificationsAfterSignIn = false;
@@ -1350,6 +1368,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Future<void> openNotificationsFromPush() => _openNotifications();
 
+  void _openPushDestination(RemoteMessage message) {
+    final requestId = int.tryParse(
+      message.data['requestId']?.toString() ?? '',
+    );
+    if (requestId != null) {
+      unawaited(openApprovalDialogFromPush(requestId));
+    } else {
+      unawaited(_openNotifications());
+    }
+  }
+
   Future<void> _setupPushNotifications() async {
     try {
       await _residentServicesReady;
@@ -1372,12 +1401,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _showVisitorNotification(message).catchError((_) {});
       });
       _messageOpenSubscription = FirebaseMessaging.onMessageOpenedApp.listen((
-        _,
+        message,
       ) {
-        if (mounted) _openNotifications();
+        if (mounted) _openPushDestination(message);
       });
       final initialMessage = await messaging.getInitialMessage();
-      if (initialMessage != null && mounted) _openNotifications();
+      if (initialMessage != null && mounted) {
+        _openPushDestination(initialMessage);
+      }
     } on FirebaseException catch (error) {
       if (mounted) _notice('Push setup failed: ${error.message ?? error.code}');
     } on ApiException catch (error) {
@@ -1461,6 +1492,77 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Future<void> openApprovalDialogFromPush(int requestId) async {
+    await _loadRequests();
+    if (!mounted) return;
+
+    AccessRequest? request;
+    for (final item in _requests) {
+      if (item.id == requestId) {
+        request = item;
+        break;
+      }
+    }
+    if (request == null) {
+      _notice('This visitor request is no longer available.');
+      return;
+    }
+    if (request.status != 'PENDING') {
+      _notice('This visitor request has already been resolved.');
+      return;
+    }
+    final visitor = request;
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Visitor approval needed'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '${visitor.person} · ${visitor.kind}',
+              style: const TextStyle(fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 8),
+            Text('Unit ${visitor.unit}'),
+            if (visitor.details.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text(visitor.details),
+            ],
+            const SizedBox(height: 12),
+            const Text('Do you approve this visitor?'),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Decide later'),
+          ),
+          TextButton(
+            onPressed: _working
+                ? null
+                : () {
+                    Navigator.of(dialogContext).pop();
+                    unawaited(_decide(visitor, 'DENIED'));
+                  },
+            child: const Text('Decline'),
+          ),
+          FilledButton(
+            onPressed: _working
+                ? null
+                : () {
+                    Navigator.of(dialogContext).pop();
+                    unawaited(_decide(visitor, 'APPROVED'));
+                  },
+            child: const Text('Approve'),
+          ),
+        ],
       ),
     );
   }
