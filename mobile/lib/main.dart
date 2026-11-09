@@ -324,7 +324,7 @@ class ApiClient {
   Future<Profile> signIn() async =>
       Profile.fromJson(await _request('/api/auth/me') as Map<String, dynamic>);
 
-  Future<String> register({
+  Future<RegistrationResult> register({
     required String displayName,
     required String role,
     String? unit,
@@ -343,7 +343,7 @@ class ApiClient {
         if (inviteCode != null) 'inviteCode': inviteCode,
       },
     );
-    return (result as Map<String, dynamic>)['status'] as String? ?? 'PENDING';
+    return RegistrationResult.fromJson(result as Map<String, dynamic>);
   }
 
   Future<List<PendingSignup>> pendingSignups() async {
@@ -427,12 +427,14 @@ class Profile {
     this.unit,
     this.name,
     this.canApproveSignups = false,
+    this.secondApproverUnit = 'A-104',
   });
   final String username;
   final UserRole role;
   final String? unit;
   final String? name;
   final bool canApproveSignups;
+  final String secondApproverUnit;
 
   factory Profile.fromJson(Map<String, dynamic> json) => Profile(
     username: json['username'] as String? ?? '',
@@ -440,7 +442,26 @@ class Profile {
     unit: json['unit'] as String?,
     name: json['name'] as String?,
     canApproveSignups: json['canApproveSignups'] == 'true',
+    secondApproverUnit: json['signupSecondApproverUnit'] as String? ?? 'A-104',
   );
+}
+
+class RegistrationResult {
+  const RegistrationResult({
+    required this.status,
+    required this.firstApproverUnit,
+    required this.secondApproverUnit,
+  });
+  final String status;
+  final String firstApproverUnit;
+  final String secondApproverUnit;
+
+  factory RegistrationResult.fromJson(Map<String, dynamic> json) =>
+      RegistrationResult(
+        status: json['status'] as String? ?? 'PENDING',
+        firstApproverUnit: json['firstApproverUnit'] as String? ?? 'A-603',
+        secondApproverUnit: json['secondApproverUnit'] as String? ?? 'A-104',
+      );
 }
 
 class PendingSignup {
@@ -450,7 +471,7 @@ class PendingSignup {
     required this.role,
     this.unit,
     required this.approvedBy603,
-    required this.approvedBy101,
+    required this.approvedBySecond,
   });
 
   final String username;
@@ -458,7 +479,7 @@ class PendingSignup {
   final String role;
   final String? unit;
   final bool approvedBy603;
-  final bool approvedBy101;
+  final bool approvedBySecond;
 
   factory PendingSignup.fromJson(Map<String, dynamic> json) => PendingSignup(
     username: json['username'] as String? ?? '',
@@ -466,7 +487,7 @@ class PendingSignup {
     role: json['role'] as String? ?? '',
     unit: json['unit'] as String?,
     approvedBy603: json['approvedBy603'] as bool? ?? false,
-    approvedBy101: json['approvedBy101'] as bool? ?? false,
+    approvedBySecond: json['approvedBySecond'] as bool? ?? false,
   );
 }
 
@@ -680,7 +701,7 @@ class _GatehouseHomeState extends State<GatehouseHome> {
     }
   }
 
-  Future<String> _register(
+  Future<RegistrationResult> _register(
     String displayName,
     String username,
     String password,
@@ -789,7 +810,7 @@ class SignInScreen extends StatefulWidget {
   });
   final UserRole role;
   final Future<void> Function(String, String, UserRole) onSignIn;
-  final Future<String> Function(
+  final Future<RegistrationResult> Function(
     String,
     String,
     String,
@@ -1006,7 +1027,7 @@ class SignUpScreen extends StatefulWidget {
   const SignUpScreen({required this.role, required this.onRegister, super.key});
 
   final UserRole role;
-  final Future<String> Function(
+  final Future<RegistrationResult> Function(
     String,
     String,
     String,
@@ -1049,7 +1070,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
         ? _username.text.trim().toLowerCase()
         : _username.text.trim();
     try {
-      final status = await widget.onRegister(
+      final registration = await widget.onRegister(
         _name.text.trim(),
         username,
         _password.text,
@@ -1062,8 +1083,8 @@ class _SignUpScreenState extends State<SignUpScreen> {
         messenger.showSnackBar(
           SnackBar(
             content: Text(
-              status == 'PENDING'
-                  ? 'Signup submitted. Both A-603 and A-101 must approve it before you can sign in.'
+              registration.status == 'PENDING'
+                  ? 'Signup submitted. ${registration.firstApproverUnit} and ${registration.secondApproverUnit} must approve it before you can sign in.'
                   : 'Account created.',
             ),
           ),
@@ -2022,7 +2043,7 @@ class _SignupApprovalsScreenState extends State<SignupApprovalsScreen> {
 
   bool _approvedByMe(PendingSignup signup) => _approverUnit == 'A-603'
       ? signup.approvedBy603
-      : signup.approvedBy101;
+      : signup.approvedBySecond;
 
   @override
   void initState() {
@@ -2140,7 +2161,10 @@ class _SignupApprovalsScreenState extends State<SignupApprovalsScreen> {
                           runSpacing: 8,
                           children: [
                             _approvalStatus('A-603', signup.approvedBy603),
-                            _approvalStatus('A-101', signup.approvedBy101),
+                            _approvalStatus(
+                              widget.profile.secondApproverUnit,
+                              signup.approvedBySecond,
+                            ),
                           ],
                         ),
                         const SizedBox(height: 12),

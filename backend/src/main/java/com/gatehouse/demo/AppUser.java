@@ -33,8 +33,8 @@ public class AppUser {
     @Column(name = "approved_by_603")
     private Boolean approvedBy603 = false;
 
-    @Column(name = "approved_by_101")
-    private Boolean approvedBy101 = false;
+    @Column(name = "approved_by_second")
+    private Boolean approvedBySecond = false;
 
     protected AppUser() {}
 
@@ -60,12 +60,12 @@ public class AppUser {
     public String getApprovalStatus() { return approvalStatus == null ? "ACTIVE" : approvalStatus; }
     public boolean isEnabled() { return enabled && "ACTIVE".equals(getApprovalStatus()); }
     public boolean isApprovedBy603() { return Boolean.TRUE.equals(approvedBy603); }
-    public boolean isApprovedBy101() { return Boolean.TRUE.equals(approvedBy101); }
+    public boolean isApprovedBySecond() { return Boolean.TRUE.equals(approvedBySecond); }
 
-    public void approveBy(String unit) {
+    public void approveBy(String unit, String secondApproverUnit) {
         if ("A-603".equals(unit)) approvedBy603 = true;
-        if ("A-101".equals(unit)) approvedBy101 = true;
-        if (isApprovedBy603() && isApprovedBy101()) {
+        if (secondApproverUnit.equals(unit)) approvedBySecond = true;
+        if (isApprovedBy603() && isApprovedBySecond()) {
             approvalStatus = "ACTIVE";
             enabled = true;
         }
