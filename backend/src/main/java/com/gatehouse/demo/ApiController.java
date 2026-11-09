@@ -169,7 +169,7 @@ public class ApiController {
         AccessRequest saved = requests.save(new AccessRequest(body.unit(), body.kind(), body.person().trim(), body.details().trim()));
         for (AppUser resident : users.findByRoleAndUnit("RESIDENT", saved.getUnit())) {
             String recipient = resident.getUsername();
-            AppNotification notification = notifications.save(new AppNotification(recipient, saved.getId(), "Visitor approval needed",
+            AppNotification notification = notifications.save(new AppNotification(recipient, saved.getId(), "Urgent visitor approval",
                 saved.getPerson() + " · " + saved.getKind() + " is waiting for your decision."));
             push.sendToRecipient(recipient, notification, deviceTokens.findByRecipient(recipient));
         }
