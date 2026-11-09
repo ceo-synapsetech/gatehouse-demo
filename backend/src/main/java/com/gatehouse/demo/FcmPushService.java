@@ -22,7 +22,7 @@ import org.springframework.stereotype.Service;
 @Service
 public class FcmPushService {
     private static final Logger log = LoggerFactory.getLogger(FcmPushService.class);
-    private static final String RESIDENT_CHANNEL_ID = "resident_visitor_approvals";
+    private static final String RESIDENT_CHANNEL_ID = "resident_visitor_alerts_v2";
     private final FirebaseApp firebaseApp;
     private final DeviceRegistrationRepository deviceRegistrations;
 
@@ -63,7 +63,9 @@ public class FcmPushService {
                 .setBody(notification.getMessage())
                 .setChannelId(RESIDENT_CHANNEL_ID)
                 .setDefaultSound(true)
-                .setDefaultVibrateTimings(true)
+                .setDefaultVibrateTimings(false)
+                .setVibrateTimingsInMillis(new long[] {0, 200, 150, 200})
+                .setPriority(AndroidNotification.Priority.HIGH)
                 .build();
             Message message = Message.builder()
                 .setToken(device.getToken())
