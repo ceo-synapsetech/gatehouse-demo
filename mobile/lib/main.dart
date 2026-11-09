@@ -48,6 +48,7 @@ final GlobalKey<_DashboardScreenState> _dashboardKey =
     GlobalKey<_DashboardScreenState>();
 _PendingNotificationAction? _pendingNotificationAction;
 bool _openNotificationsAfterSignIn = false;
+Future<void> _residentServicesReady = Future<void>.value();
 
 class _PendingNotificationAction {
   const _PendingNotificationAction({
@@ -183,9 +184,16 @@ Future<void> _showVisitorNotification(RemoteMessage message) async {
   );
 }
 
-Future<void> main() async {
+void main() {
   WidgetsFlutterBinding.ensureInitialized();
   if (_appRoleName == 'resident') {
+    _residentServicesReady = _initializeResidentServices();
+  }
+  runApp(const GatehouseApp());
+}
+
+Future<void> _initializeResidentServices() async {
+  try {
     await Firebase.initializeApp(
       options: DefaultFirebaseOptions.currentPlatform,
     );
@@ -195,8 +203,10 @@ Future<void> main() async {
       );
       await _initializeLocalNotifications(handleLaunchDetails: true);
     }
+  } catch (error, stackTrace) {
+    // Keep the login UI available if Firebase or notification setup fails.
+    debugPrint('Resident notification setup failed: $error\\n$stackTrace');
   }
-  runApp(const GatehouseApp());
 }
 
 enum UserRole { security, resident }
@@ -590,6 +600,7 @@ class _GatehouseHomeState extends State<GatehouseHome> {
 
   Future<void> _requestNotificationPermission() async {
     try {
+      await _residentServicesReady;
       await FirebaseMessaging.instance.requestPermission(
         alert: true,
         badge: true,
@@ -1336,6 +1347,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Future<void> _setupPushNotifications() async {
     try {
+      await _residentServicesReady;
       final messaging = FirebaseMessaging.instance;
       final permission = await messaging.getNotificationSettings();
       if (permission.authorizationStatus == AuthorizationStatus.denied) return;
