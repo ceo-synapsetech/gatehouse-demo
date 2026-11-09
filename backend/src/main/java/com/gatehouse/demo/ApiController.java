@@ -7,6 +7,7 @@ import java.security.MessageDigest;
 import java.util.regex.Pattern;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -28,6 +29,7 @@ public class ApiController {
     private final PasswordEncoder passwordEncoder;
     private final String securitySignupCode;
     private final String signupSecondApproverUnit;
+    private final String signupA603BootstrapCode;
     private static final Pattern A_WING_UNIT = Pattern.compile("^A-(?:[1-9]|1[0-4])0[1-5]$");
     private static final Pattern USERNAME = Pattern.compile("^[a-zA-Z0-9._@+-]{3,120}$");
     private static final Pattern EMAIL = Pattern.compile("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$");
@@ -35,7 +37,8 @@ public class ApiController {
     public ApiController(AccessRequestRepository requests, AppNotificationRepository notifications,
             DeviceRegistrationRepository deviceTokens, FcmPushService push, AppUserRepository users,
             PasswordEncoder passwordEncoder, @Value("${SECURITY_SIGNUP_CODE:}") String securitySignupCode,
-            @Value("${SIGNUP_SECOND_APPROVER_UNIT:A-104}") String signupSecondApproverUnit) {
+            @Value("${SIGNUP_SECOND_APPROVER_UNIT:A-104}") String signupSecondApproverUnit,
+            @Value("${SIGNUP_A603_BOOTSTRAP_CODE:}") String signupA603BootstrapCode) {
         this.requests = requests;
         this.notifications = notifications;
         this.deviceTokens = deviceTokens;
@@ -44,6 +47,7 @@ public class ApiController {
         this.passwordEncoder = passwordEncoder;
         this.securitySignupCode = securitySignupCode;
         this.signupSecondApproverUnit = signupSecondApproverUnit.trim().toUpperCase(java.util.Locale.ROOT);
+        this.signupA603BootstrapCode = signupA603BootstrapCode;
         if (!validAUnit(this.signupSecondApproverUnit) || "A-603".equals(this.signupSecondApproverUnit))
             throw new IllegalArgumentException("SIGNUP_SECOND_APPROVER_UNIT must be a valid A-wing flat other than A-603");
     }
@@ -62,6 +66,7 @@ public class ApiController {
         return result;
     }
 
+    @Transactional
     @PostMapping("/auth/register") public Map<String, String> register(@RequestBody RegisterAccount body) {
         if (body.role() == null || (!body.role().equals("RESIDENT") && !body.role().equals("SECURITY")))
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Choose a valid account type");
@@ -76,10 +81,26 @@ public class ApiController {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Enter your name");
 
         String unit = null;
+        boolean bootstrapFirst603Account = false;
+        boolean initialSecondApproverAccount = false;
         if (body.role().equals("RESIDENT")) {
             unit = body.unit() == null ? "" : body.unit().trim().toUpperCase(java.util.Locale.ROOT);
             if (!validAUnit(unit))
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Choose an A-wing flat from 101 through 1405");
+            initialSecondApproverAccount = signupSecondApproverUnit.equals(unit) &&
+                !users.existsByRoleAndUnitAndEnabledTrue("RESIDENT", unit);
+            if ("A-603".equals(unit) && !users.existsByRoleAndUnitAndEnabledTrue("RESIDENT", unit)) {
+                users.lockByUsername("guard01").orElseThrow(() -> new ResponseStatusException(
+                    HttpStatus.SERVICE_UNAVAILABLE, "A-603 initial setup is not available yet"));
+            }
+            if ("A-603".equals(unit) && !users.existsByRoleAndUnitAndEnabledTrue("RESIDENT", unit)) {
+                if (signupA603BootstrapCode.isBlank())
+                    throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "A-603 initial setup is not configured yet");
+                String suppliedCode = body.inviteCode() == null ? "" : body.inviteCode();
+                if (!MessageDigest.isEqual(signupA603BootstrapCode.getBytes(StandardCharsets.UTF_8), suppliedCode.getBytes(StandardCharsets.UTF_8)))
+                    throw new ResponseStatusException(HttpStatus.FORBIDDEN, "The A-603 setup code is not valid");
+                bootstrapFirst603Account = true;
+            }
         } else {
             if (securitySignupCode.isBlank())
                 throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Security signup is not configured yet");
@@ -90,16 +111,23 @@ public class ApiController {
         if (users.existsById(username))
             throw new ResponseStatusException(HttpStatus.CONFLICT, "An account already exists with that ID");
 
+        String approvalStatus = bootstrapFirst603Account ? "ACTIVE" : "PENDING";
         users.save(new AppUser(username, passwordEncoder.encode(body.password()), body.role(),
-            body.displayName().trim(), unit, "PENDING"));
-        return Map.of("status", "PENDING", "username", username,
+            body.displayName().trim(), unit, approvalStatus));
+        String approvalMessage = bootstrapFirst603Account
+            ? "A-603 account is ready. Sign in to begin reviewing signups."
+            : initialSecondApproverAccount
+                ? "A-603 must approve the first " + signupSecondApproverUnit + " account. Future signups require both approvers."
+                : "Both A-603 and " + signupSecondApproverUnit + " must approve this signup before you can sign in.";
+        return Map.of("status", approvalStatus, "username", username, "approvalMessage", approvalMessage,
             "firstApproverUnit", "A-603", "secondApproverUnit", signupSecondApproverUnit);
     }
 
     @GetMapping("/admin/signups/pending") public List<PendingSignupView> pendingSignups(Authentication auth) {
         requireSignupApprover(auth);
         return users.findByApprovalStatusOrderByUsernameAsc("PENDING").stream()
-            .map(ApiController::pendingSignupView).toList();
+            .map(user -> pendingSignupView(user, signupSecondApproverUnit.equals(user.getUnit()) &&
+                !users.existsByRoleAndUnitAndEnabledTrue("RESIDENT", signupSecondApproverUnit))).toList();
     }
 
     @PostMapping("/admin/signups/decision") public SignupDecisionView decideSignup(@RequestBody SignupReview body, Authentication auth) {
@@ -112,7 +140,12 @@ public class ApiController {
             if (("A-603".equals(approver.getUnit()) && candidate.isApprovedBy603()) ||
                     (signupSecondApproverUnit.equals(approver.getUnit()) && candidate.isApprovedBySecond()))
                 throw new ResponseStatusException(HttpStatus.CONFLICT, "Your approval is already recorded");
+            boolean initialSecondApproverAccount = "A-603".equals(approver.getUnit()) &&
+                signupSecondApproverUnit.equals(candidate.getUnit()) &&
+                !users.existsByRoleAndUnitAndEnabledTrue("RESIDENT", signupSecondApproverUnit);
             candidate.approveBy(approver.getUnit(), signupSecondApproverUnit);
+            if (initialSecondApproverAccount)
+                candidate.approveBy(signupSecondApproverUnit, signupSecondApproverUnit);
         } else if ("REJECT".equals(body.decision())) {
             candidate.reject();
         } else {
@@ -218,14 +251,15 @@ public class ApiController {
     private static NotificationView notificationView(AppNotification n) {
         return new NotificationView(n.getId(), n.getRequestId(), n.getTitle(), n.getMessage(), n.getCreatedAt(), n.getReadAt());
     }
-    private static PendingSignupView pendingSignupView(AppUser user) {
-        return new PendingSignupView(user.getUsername(), user.getDisplayName(), user.getRole(), user.getUnit(), user.isApprovedBy603(), user.isApprovedBySecond());
+    private static PendingSignupView pendingSignupView(AppUser user, boolean initialSecondApproverAccount) {
+        return new PendingSignupView(user.getUsername(), user.getDisplayName(), user.getRole(), user.getUnit(),
+            user.isApprovedBy603(), user.isApprovedBySecond(), initialSecondApproverAccount);
     }
     public record CreateRequest(String unit, String kind, String person, String details) {}
     public record DeviceRequest(String token) {}
     public record RegisterAccount(String username, String password, String displayName, String role, String unit, String inviteCode) {}
     public record SignupReview(String username, String decision) {}
-    public record PendingSignupView(String username, String displayName, String role, String unit, boolean approvedBy603, boolean approvedBySecond) {}
+    public record PendingSignupView(String username, String displayName, String role, String unit, boolean approvedBy603, boolean approvedBySecond, boolean initialSecondApproverAccount) {}
     public record SignupDecisionView(String username, String status, boolean approvedBy603, boolean approvedBySecond) {}
     public record Decision(String status) {}
     public record RequestView(Long id, String unit, String residentName, String kind, String person, String details, AccessRequest.Status status, java.time.Instant createdAt) {}
